@@ -1,14 +1,12 @@
 import { kv } from '@vercel/kv';
 
 export default async function handler(req, res) {
-  const { username } = req.query;
-  if (!username) return res.status(400).json({ error: 'username query parameter required' });
+  if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' });
 
-  const key = `messages:${username}`;
-  const messages = await kv.lrange(key, 0, -1);
-  if (messages.length > 0) {
-    await kv.del(key);
-  }
+  const { recipient, payload } = req.body;
+  if (!recipient || !payload) return res.status(400).json({ error: 'recipient and payload required' });
 
-  return res.status(200).json({ messages });
+  await kv.rpush(`messages:${recipient}`, payload);
+
+  return res.status(200).json({ status: 'sent' });
 }

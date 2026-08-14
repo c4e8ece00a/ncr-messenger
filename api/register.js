@@ -8,9 +8,10 @@ export default async function handler(req, res) {
   const exists = await kv.exists(`publicKey:${username}`);
   if (exists) return res.status(409).json({ error: 'Username already taken' });
 
-  await kv.set(`publicKey:${username}`, JSON.stringify(publicKey));
+  // Сохраняем объект напрямую — @vercel/kv сам сериализует его в JSON
+  await kv.set(`publicKey:${username}`, publicKey);
   if (subscription) {
-    await kv.set(`subscription:${username}`, JSON.stringify(subscription));
+    await kv.set(`subscription:${username}`, subscription);
   }
   return res.status(200).json({ status: 'ok' });
 }

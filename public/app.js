@@ -83,7 +83,7 @@ async function subscribeForPush() {
       if (permission !== 'granted') return null;
       const subscription = await registration.pushManager.subscribe({
         userVisibleOnly: true,
-        applicationServerKey: urlBase64ToUint8Array('YOUR_VAPID_PUBLIC_KEY'), // замените
+        applicationServerKey: urlBase64ToUint8Array('BMr8YsMDhvdx8Yvw60pR6sCVl20kecplpbTu8eXldRvHF_NXNP_prEcSmtt95TnK-foo9voDA1ig8ufv_eT3v_s'), // замените
       });
       return subscription;
     } catch (e) {

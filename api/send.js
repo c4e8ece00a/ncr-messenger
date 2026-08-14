@@ -2,9 +2,9 @@ import { kv } from '@vercel/kv';
 import webpush from 'web-push';
 
 // Замените на свои VAPID ключи (как сгенерировать – ниже)
-const VAPID_PUBLIC_KEY = 'YOUR_PUBLIC_KEY';
-const VAPID_PRIVATE_KEY = 'YOUR_PRIVATE_KEY';
-const VAPID_SUBJECT = 'mailto:your@email.com';
+const VAPID_PUBLIC_KEY = 'BMr8YsMDhvdx8Yvw60pR6sCVl20kecplpbTu8eXldRvHF_NXNP_prEcSmtt95TnK-foo9voDA1ig8ufv_eT3v_s';
+const VAPID_PRIVATE_KEY = 'UopTjfsLDOo0h_8nq-aQrTTQFHYrzlWsg7s74HTUevI';
+const VAPID_SUBJECT = 'mailto: <bendind@rambler.ru>';
 
 webpush.setVapidDetails(VAPID_SUBJECT, VAPID_PUBLIC_KEY, VAPID_PRIVATE_KEY);
 

@@ -1,11 +1,11 @@
 {
   "name": "ncr-messenger",
-  "version": "2.2.0",
+  "version": "3.0.0",
   "private": true,
   "engines": {
-    "node": "24.x"
+    "node": "20.x"
   },
   "dependencies": {
-    "@vercel/kv": "^1.0.0"
+    "@upstash/redis": "^1.35.3"
   }
 }

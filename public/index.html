@@ -13,10 +13,11 @@
     <div id="login-screen" class="screen">
       <h1>NCR Messenger</h1>
       <input type="text" id="username-input" placeholder="Ваше имя" autocomplete="off">
-      <button id="register-btn">Войти</button>
+      <input type="password" id="password-input" placeholder="Пароль" autocomplete="off">
+      <button id="register-btn">Войти / Регистрация</button>
       <p id="login-error" class="error"></p>
-      <p><small>Для push-уведомлений добавьте приложение на домашний экран.</small></p>
-    </div>
+      <p><small>Если имя свободно, будет создан новый аккаунт. Если занято, пароль должен совпасть.</small></p>
+  </div>
     <div id="chat-screen" class="screen hidden">
       <header>
         <span id="current-user"></span>

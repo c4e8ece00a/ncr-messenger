@@ -1,5 +1,11 @@
-// Параметры NCR-LWE (ДЕМО – НЕ ДЛЯ ПРОДАКШЕНА!)
-// Для реальной защиты увеличьте N до 256+ и Q до 65536
+/*
+ * NCR-LWE DEMO
+ *
+ * ВАЖНО:
+ * Это демонстрационная реализация.
+ * Не использовать для реальной криптографической защиты.
+ */
+
 const N = 8;
 const Q = 257;
 const SMALL_BOUND = 1;
@@ -10,85 +16,259 @@ function mod(n, m = Q) {
 
 function center(v) {
   v = mod(v);
-  return v > Q / 2 ? v - Q : v;
+
+  return v > Q / 2
+    ? v - Q
+    : v;
 }
 
 function uniformMatrix() {
-  return Array.from({ length: N }, () =>
-    Array.from({ length: N }, () => Math.floor(Math.random() * Q))
+  return Array.from(
+    { length: N },
+    () =>
+      Array.from(
+        { length: N },
+        () => Math.floor(Math.random() * Q)
+      )
   );
 }
 
 function smallMatrix() {
-  return Array.from({ length: N }, () =>
-    Array.from({ length: N }, () =>
-      Math.floor(Math.random() * (2 * SMALL_BOUND + 1)) - SMALL_BOUND
-    )
+  return Array.from(
+    { length: N },
+    () =>
+      Array.from(
+        { length: N },
+        () =>
+          Math.floor(
+            Math.random() * (2 * SMALL_BOUND + 1)
+          ) - SMALL_BOUND
+      )
   );
 }
 
 function matAdd(A, B) {
-  return A.map((row, i) => row.map((val, j) => mod(val + B[i][j])));
+  return A.map((row, i) =>
+    row.map((value, j) =>
+      mod(value + B[i][j])
+    )
+  );
 }
 
 function matSub(A, B) {
-  return A.map((row, i) => row.map((val, j) => mod(val - B[i][j])));
+  return A.map((row, i) =>
+    row.map((value, j) =>
+      mod(value - B[i][j])
+    )
+  );
 }
 
 function matMul(A, B) {
-  const result = Array.from({ length: N }, () => new Array(N).fill(0));
+  const result = Array.from(
+    { length: N },
+    () => new Array(N).fill(0)
+  );
+
   for (let i = 0; i < N; i++) {
     for (let k = 0; k < N; k++) {
       const aik = A[i][k];
-      if (aik !== 0) {
-        for (let j = 0; j < N; j++) {
-          result[i][j] = mod(result[i][j] + aik * B[k][j]);
-        }
+
+      if (aik === 0) {
+        continue;
+      }
+
+      for (let j = 0; j < N; j++) {
+        result[i][j] = mod(
+          result[i][j] +
+          aik * B[k][j]
+        );
       }
     }
   }
+
   return result;
+}
+
+function validateMatrix(matrix, name) {
+  if (!Array.isArray(matrix)) {
+    throw new Error(
+      `${name}: матрица отсутствует`
+    );
+  }
+
+  if (matrix.length !== N) {
+    throw new Error(
+      `${name}: неверный размер`
+    );
+  }
+
+  for (const row of matrix) {
+    if (
+      !Array.isArray(row) ||
+      row.length !== N
+    ) {
+      throw new Error(
+        `${name}: неверная структура`
+      );
+    }
+  }
 }
 
 function generateKeypair() {
   const A = uniformMatrix();
-  const S = smallMatrix(); // секрет
-  const E = smallMatrix(); // шум
-  const B = matAdd(matMul(A, S), E);
-  return { publicKey: { A, B }, privateKey: S };
+
+  const S = smallMatrix();
+  const E = smallMatrix();
+
+  const B = matAdd(
+    matMul(A, S),
+    E
+  );
+
+  return {
+    publicKey: {
+      A,
+      B
+    },
+    privateKey: S
+  };
 }
 
 function encapsulate(publicKey) {
-  const { A, B } = publicKey;
-  // Сеансовый ключ K: матрица из 0 и 1
-  const K = Array.from({ length: N }, () =>
-    Array.from({ length: N }, () => Math.floor(Math.random() * 2))
+  validateMatrix(publicKey.A, 'A');
+  validateMatrix(publicKey.B, 'B');
+
+  const {
+    A,
+    B
+  } = publicKey;
+
+  /*
+   * Сессионный ключ.
+   */
+  const K = Array.from(
+    { length: N },
+    () =>
+      Array.from(
+        { length: N },
+        () => Math.floor(Math.random() * 2)
+      )
   );
+
   const R1 = smallMatrix();
   const R2 = smallMatrix();
   const E1 = smallMatrix();
-  const U = matAdd(matMul(R1, A), E1);
-  const V = matAdd(matAdd(matMul(R1, B), R2), K);
-  return { ciphertext: { U, V }, K };
+
+  const U = matAdd(
+    matMul(R1, A),
+    E1
+  );
+
+  const V = matAdd(
+    matAdd(
+      matMul(R1, B),
+      R2
+    ),
+    K
+  );
+
+  return {
+    ciphertext: {
+      U,
+      V
+    },
+    K
+  };
 }
 
 function decapsulate(privateKey, ciphertext) {
-  const { U, V } = ciphertext;
-  const M = matSub(V, matMul(U, privateKey));
-  const K_rec = Array.from({ length: N }, () => new Array(N).fill(0));
+  validateMatrix(
+    privateKey,
+    'privateKey'
+  );
+
+  if (!ciphertext) {
+    throw new Error(
+      'Отсутствует ciphertext'
+    );
+  }
+
+  validateMatrix(
+    ciphertext.U,
+    'U'
+  );
+
+  validateMatrix(
+    ciphertext.V,
+    'V'
+  );
+
+  const {
+    U,
+    V
+  } = ciphertext;
+
+  const M = matSub(
+    V,
+    matMul(U, privateKey)
+  );
+
+  const K_rec = Array.from(
+    { length: N },
+    () => new Array(N).fill(0)
+  );
+
   for (let i = 0; i < N; i++) {
     for (let j = 0; j < N; j++) {
-      const v = center(M[i][j]);
-      if (Math.abs(v) < Q / 4) K_rec[i][j] = 0;
-      else if (Math.abs(v - 1) < Q / 4) K_rec[i][j] = 1;
-      else throw new Error('Ошибка декодирования');
+
+      const value = center(
+        M[i][j]
+      );
+
+      /*
+       * Вместо старой схемы:
+       *
+       * if (...) 0
+       * else if (...) 1
+       * else throw
+       *
+       * выбираем ближайший допустимый символ.
+       *
+       * Для данной демонстрационной схемы
+       * допустимы 0 и 1.
+       */
+
+      const distanceToZero =
+        Math.abs(value);
+
+      const distanceToOne =
+        Math.min(
+          Math.abs(value - 1),
+          Math.abs(value + Q - 1),
+          Math.abs(value - Q - 1)
+        );
+
+      K_rec[i][j] =
+        distanceToZero <= distanceToOne
+          ? 0
+          : 1;
     }
   }
+
   return K_rec;
 }
 
 function matrixToBytes(K) {
-  return Uint8Array.from(K.flat());
+  validateMatrix(K, 'K');
+
+  return Uint8Array.from(
+    K.flat().map(value => value & 1)
+  );
 }
 
-window.NCRLWE = { generateKeypair, encapsulate, decapsulate, matrixToBytes };
+window.NCRLWE = {
+  generateKeypair,
+  encapsulate,
+  decapsulate,
+  matrixToBytes
+};

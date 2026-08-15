@@ -1,9 +1,11 @@
 {
   "name": "ncr-messenger",
-  "version": "2.0.0",
+  "version": "2.1.0",
   "private": true,
+  "engines": {
+    "node": "18.x"
+  },
   "dependencies": {
-    "@vercel/kv": "^1.0.0",
-    "web-push": "^3.6.6"
+    "@vercel/kv": "^1.0.0"
   }
 }

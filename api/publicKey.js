@@ -1,15 +1,38 @@
-import { kv } from '@vercel/kv';
+import { redis } from './_redis.js';
 
 export default async function handler(req, res) {
-  const { username } = req.query;
-  if (!username) {
-    return res.status(400).json({ error: 'username query parameter required' });
+  if (req.method !== 'GET') {
+    return res.status(405).json({
+      error: 'Method not allowed'
+    });
   }
 
-  const publicKey = await kv.get(`publicKey:${username}`);
-  if (!publicKey) {
-    return res.status(404).json({ error: 'User not found' });
-  }
+  try {
+    const username = String(req.query?.username || '').trim();
 
-  return res.status(200).json({ publicKey });
+    if (!username) {
+      return res.status(400).json({
+        error: 'username query parameter required'
+      });
+    }
+
+    const publicKey = await redis.get(`publicKey:${username}`);
+
+    if (!publicKey) {
+      return res.status(404).json({
+        error: 'Пользователь не найден'
+      });
+    }
+
+    return res.status(200).json({
+      publicKey
+    });
+
+  } catch (error) {
+    console.error('PUBLIC KEY ERROR:', error);
+
+    return res.status(500).json({
+      error: 'Ошибка сервера'
+    });
+  }
 }

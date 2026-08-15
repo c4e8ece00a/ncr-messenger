@@ -41,19 +41,35 @@ async function decryptMessage(aesKey, nonce, ciphertext) {
 }
 
 // --- API ---
-async function apiRegister(username, publicKey, subscription) {
-  const res = await fetch('/api/register', {
+async function apiAuth(username, password, publicKey, subscription) {
+  const res = await fetch('/api/auth', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ username, publicKey, subscription }),
+    body: JSON.stringify({ username, password, publicKey, subscription }),
   });
-  if (!res.ok) throw new Error(await res.text());
+  if (!res.ok) {
+    const errorText = await res.text();
+    let errorMessage = 'Ошибка сервера';
+    try {
+      const errorJson = JSON.parse(errorText);
+      errorMessage = errorJson.error || errorMessage;
+    } catch {}
+    throw new Error(errorMessage);
+  }
   return res.json();
 }
 
 async function apiGetPublicKey(username) {
   const res = await fetch(`/api/publicKey?username=${encodeURIComponent(username)}`);
-  if (!res.ok) throw new Error(await res.text());
+  if (!res.ok) {
+    const errorText = await res.text();
+    let errorMessage = 'Ошибка сервера';
+    try {
+      const errorJson = JSON.parse(errorText);
+      errorMessage = errorJson.error || errorMessage;
+    } catch {}
+    throw new Error(errorMessage);
+  }
   const data = await res.json();
   return data.publicKey;
 }
@@ -64,54 +80,46 @@ async function apiSend(recipient, payload) {
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ recipient, payload }),
   });
-  if (!res.ok) throw new Error(await res.text());
+  if (!res.ok) {
+    const errorText = await res.text();
+    let errorMessage = 'Ошибка сервера';
+    try {
+      const errorJson = JSON.parse(errorText);
+      errorMessage = errorJson.error || errorMessage;
+    } catch {}
+    throw new Error(errorMessage);
+  }
   return res.json();
 }
 
 async function apiGetMessages(username) {
   const res = await fetch(`/api/messages?username=${encodeURIComponent(username)}`);
-  if (!res.ok) throw new Error(await res.text());
-  return res.json();
-}
-
-// --- Push-подписка ---
-async function subscribeForPush() {
-  if ('serviceWorker' in navigator && 'PushManager' in window) {
+  if (!res.ok) {
+    const errorText = await res.text();
+    let errorMessage = 'Ошибка сервера';
     try {
-      const registration = await navigator.serviceWorker.ready;
-      const permission = await Notification.requestPermission();
-      if (permission !== 'granted') return null;
-      const subscription = await registration.pushManager.subscribe({
-        userVisibleOnly: true,
-        applicationServerKey: urlBase64ToUint8Array('BMr8YsMDhvdx8Yvw60pR6sCVl20kecplpbTu8eXldRvHF_NXNP_prEcSmtt95TnK-foo9voDA1ig8ufv_eT3v_s'), // замените
-      });
-      return subscription;
-    } catch (e) {
-      console.error('Push subscription failed', e);
-      return null;
-    }
+      const errorJson = JSON.parse(errorText);
+      errorMessage = errorJson.error || errorMessage;
+    } catch {}
+    throw new Error(errorMessage);
   }
-  return null;
-}
-
-function urlBase64ToUint8Array(base64String) {
-  const padding = '='.repeat((4 - base64String.length % 4) % 4);
-  const base64 = (base64String + padding).replace(/-/g, '+').replace(/_/g, '/');
-  const rawData = atob(base64);
-  const outputArray = new Uint8Array(rawData.length);
-  for (let i = 0; i < rawData.length; ++i) outputArray[i] = rawData.charCodeAt(i);
-  return outputArray;
+  return res.json();
 }
 
 // --- Логика интерфейса ---
 document.getElementById('register-btn').addEventListener('click', async () => {
   const input = document.getElementById('username-input');
+  const passwordInput = document.getElementById('password-input');
   const name = input.value.trim();
-  if (!name) return;
+  const password = passwordInput.value.trim();
+  if (!name || !password) {
+    document.getElementById('login-error').textContent = 'Введите имя и пароль';
+    return;
+  }
   try {
     loadOrGenerateKeys();
-    const subscription = await subscribeForPush();
-    await apiRegister(name, publicKey, subscription);
+    const subscription = null; // временно отключаем push-подписку
+    await apiAuth(name, password, publicKey, subscription);
     username = name;
     document.getElementById('current-user').textContent = username;
     document.getElementById('login-screen').classList.add('hidden');
@@ -166,20 +174,23 @@ async function checkMessages() {
 
 async function processIncomingMessage(payload) {
   try {
+    console.log('Получено сырое сообщение:', payload);
     const K = NCRLWE.decapsulate(privateKey, { U: payload.U, V: payload.V });
     const aesKey = await deriveAesKey(K);
     const plaintext = await decryptMessage(aesKey, payload.nonce, payload.ciphertext);
+    console.log('Расшифровано:', plaintext);
     const messagesDiv = document.getElementById('messages');
     const div = document.createElement('div');
     div.className = 'message';
     div.textContent = plaintext;
     messagesDiv.appendChild(div);
   } catch (e) {
+    alert('Ошибка при расшифровке: ' + e.message);
     console.error('Decryption error', e);
   }
 }
 
-// Регистрируем service worker при загрузке
+// Регистрируем service worker при загрузке (без push)
 if ('serviceWorker' in navigator) {
   navigator.serviceWorker.register('/sw.js')
     .then(() => console.log('SW registered'))

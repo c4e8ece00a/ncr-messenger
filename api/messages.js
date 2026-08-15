@@ -1,4 +1,4 @@
-import { redis } from './_redis.js';
+import { kv } from '@vercel/kv';
 
 export default async function handler(req, res) {
   if (req.method !== 'GET') {
@@ -7,48 +7,43 @@ export default async function handler(req, res) {
     });
   }
 
+  const { username } = req.query;
+
+  if (!username || typeof username !== 'string') {
+    return res.status(400).json({
+      error: 'username query parameter required'
+    });
+  }
+
+  // Очень важно:
+  // сообщения нельзя отдавать из HTTP-кэша.
+  res.setHeader(
+    'Cache-Control',
+    'no-store, no-cache, must-revalidate, proxy-revalidate'
+  );
+
+  res.setHeader('Pragma', 'no-cache');
+  res.setHeader('Expires', '0');
+
   try {
-    const username = String(req.query?.username || '').trim();
-
-    if (!username) {
-      return res.status(400).json({
-        error: 'username query parameter required'
-      });
-    }
-
     const key = `messages:${username}`;
 
-    const rawMessages = await redis.lrange(key, 0, -1);
+    const messages = await kv.lrange(key, 0, -1);
 
-    const messages = [];
-
-    for (const raw of rawMessages) {
-      try {
-        const message =
-          typeof raw === 'string'
-            ? JSON.parse(raw)
-            : raw;
-
-        if (message && message.id && message.payload) {
-          messages.push(message);
-        }
-      } catch (error) {
-        console.error(
-          'INVALID MESSAGE IN QUEUE:',
-          error
-        );
-      }
+    // После успешного чтения очищаем очередь.
+    if (messages.length > 0) {
+      await kv.del(key);
     }
 
     return res.status(200).json({
-      messages
+      messages: Array.isArray(messages) ? messages : []
     });
 
   } catch (error) {
-    console.error('MESSAGES ERROR:', error);
+    console.error('GET /api/messages error:', error);
 
     return res.status(500).json({
-      error: 'Ошибка получения сообщений'
+      error: 'Failed to read messages'
     });
   }
 }

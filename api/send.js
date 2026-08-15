@@ -1,61 +1,50 @@
-import { kv } from '@vercel/kv';
+import crypto from 'node:crypto';
+import { getRedis } from '../lib/redis.js';
 
 export default async function handler(req, res) {
-  if (req.method !== 'GET') {
-    return res.status(405).json({
-      error: 'Method not allowed'
-    });
+  res.setHeader('Cache-Control', 'no-store');
+
+  if (req.method !== 'POST') {
+    return res.status(405).json({ error: 'Method not allowed' });
   }
-
-  const { username } = req.query;
-
-  if (!username || typeof username !== 'string') {
-    return res.status(400).json({
-      error: 'username query parameter required'
-    });
-  }
-
-  // Никогда не кэшируем очередь сообщений.
-  res.setHeader(
-    'Cache-Control',
-    'no-store, no-cache, must-revalidate, proxy-revalidate'
-  );
-  res.setHeader('Pragma', 'no-cache');
-  res.setHeader('Expires', '0');
 
   try {
-    const key = `messages:${username}`;
+    const body = req.body || {};
+    const recipient = String(body.recipient ?? '').trim();
+    const sender = String(body.sender ?? '').trim();
+    const payload = body.payload;
 
-    const rawMessages = await kv.lrange(key, 0, -1);
-
-    const messages = [];
-
-    for (const raw of rawMessages) {
-      try {
-        if (typeof raw === 'string') {
-          messages.push(JSON.parse(raw));
-        } else {
-          messages.push(raw);
-        }
-      } catch (error) {
-        console.error('Invalid stored message:', raw);
-      }
+    if (!recipient || !sender || !payload || typeof payload !== 'object') {
+      return res.status(400).json({ error: 'sender, recipient and payload are required' });
     }
 
-    // Очищаем очередь только после успешного чтения.
-    if (rawMessages.length > 0) {
-      await kv.del(key);
+    if (!payload.U || !payload.V || !payload.nonce || !payload.ciphertext) {
+      return res.status(400).json({ error: 'Invalid encrypted payload' });
     }
+
+    const redis = getRedis();
+    const recipientExists = await redis.exists(`user:${recipient}`);
+
+    if (!recipientExists) {
+      return res.status(404).json({ error: 'Получатель не найден' });
+    }
+
+    const message = {
+      id: crypto.randomUUID(),
+      sender,
+      recipient,
+      createdAt: Date.now(),
+      ...payload
+    };
+
+    await redis.rpush(`messages:${recipient}`, JSON.stringify(message));
 
     return res.status(200).json({
-      messages
+      status: 'sent',
+      id: message.id
     });
-
   } catch (error) {
-    console.error('GET /api/messages error:', error);
-
-    return res.status(500).json({
-      error: 'Failed to read messages'
-    });
+    console.error('POST /api/send:', error);
+    return res.status(500).json({ error: error?.message || 'Ошибка отправки' });
   }
 }

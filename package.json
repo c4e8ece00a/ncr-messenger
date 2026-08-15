@@ -2,10 +2,14 @@
   "name": "ncr-messenger",
   "version": "3.0.0",
   "private": true,
+  "type": "module",
   "engines": {
-    "node": "20.x"
+    "node": ">=20"
   },
   "dependencies": {
-    "@upstash/redis": "^1.35.3"
+    "@upstash/redis": "^1.38.0"
+  },
+  "scripts": {
+    "test": "node tests/test-ncr-lwe.cjs && node tests/test-e2e.cjs"
   }
 }

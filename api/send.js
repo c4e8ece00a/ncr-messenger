@@ -1,39 +1,61 @@
 import { kv } from '@vercel/kv';
 
 export default async function handler(req, res) {
-  if (req.method !== 'POST') {
+  if (req.method !== 'GET') {
     return res.status(405).json({
       error: 'Method not allowed'
     });
   }
 
-  try {
-    const { recipient, payload } = req.body || {};
+  const { username } = req.query;
 
-    if (
-      !recipient ||
-      typeof recipient !== 'string' ||
-      !payload ||
-      typeof payload !== 'object'
-    ) {
-      return res.status(400).json({
-        error: 'recipient and payload required'
-      });
+  if (!username || typeof username !== 'string') {
+    return res.status(400).json({
+      error: 'username query parameter required'
+    });
+  }
+
+  // Никогда не кэшируем очередь сообщений.
+  res.setHeader(
+    'Cache-Control',
+    'no-store, no-cache, must-revalidate, proxy-revalidate'
+  );
+  res.setHeader('Pragma', 'no-cache');
+  res.setHeader('Expires', '0');
+
+  try {
+    const key = `messages:${username}`;
+
+    const rawMessages = await kv.lrange(key, 0, -1);
+
+    const messages = [];
+
+    for (const raw of rawMessages) {
+      try {
+        if (typeof raw === 'string') {
+          messages.push(JSON.parse(raw));
+        } else {
+          messages.push(raw);
+        }
+      } catch (error) {
+        console.error('Invalid stored message:', raw);
+      }
     }
 
-    const key = `messages:${recipient}`;
-
-    await kv.rpush(key, JSON.stringify(payload));
+    // Очищаем очередь только после успешного чтения.
+    if (rawMessages.length > 0) {
+      await kv.del(key);
+    }
 
     return res.status(200).json({
-      status: 'sent'
+      messages
     });
 
   } catch (error) {
-    console.error('POST /api/send error:', error);
+    console.error('GET /api/messages error:', error);
 
     return res.status(500).json({
-      error: 'Failed to send message'
+      error: 'Failed to read messages'
     });
   }
 }

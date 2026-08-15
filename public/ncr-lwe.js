@@ -1,7 +1,7 @@
 // Параметры NCR-LWE (ДЕМО – НЕ ДЛЯ ПРОДАКШЕНА!)
 // Для реальной защиты увеличьте N до 256+ и Q до 65536
-const N = 256;
-const Q = 65536;
+const N = 8;
+const Q = 257;
 const SMALL_BOUND = 1;
 
 function mod(n, m = Q) {
@@ -52,14 +52,15 @@ function matMul(A, B) {
 
 function generateKeypair() {
   const A = uniformMatrix();
-  const S = smallMatrix();
-  const E = smallMatrix();
+  const S = smallMatrix(); // секрет
+  const E = smallMatrix(); // шум
   const B = matAdd(matMul(A, S), E);
   return { publicKey: { A, B }, privateKey: S };
 }
 
 function encapsulate(publicKey) {
   const { A, B } = publicKey;
+  // Сеансовый ключ K: матрица из 0 и 1
   const K = Array.from({ length: N }, () =>
     Array.from({ length: N }, () => Math.floor(Math.random() * 2))
   );
@@ -90,9 +91,4 @@ function matrixToBytes(K) {
   return Uint8Array.from(K.flat());
 }
 
-// Экспорт для Node.js и для браузера
-if (typeof module !== 'undefined' && module.exports) {
-  module.exports = { generateKeypair, encapsulate, decapsulate, matrixToBytes };
-} else {
-  window.NCRLWE = { generateKeypair, encapsulate, decapsulate, matrixToBytes };
-}
+window.NCRLWE = { generateKeypair, encapsulate, decapsulate, matrixToBytes };

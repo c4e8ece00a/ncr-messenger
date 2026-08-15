@@ -9,32 +9,31 @@ export default async function handler(req, res) {
     return res.status(400).json({ error: 'username, password and publicKey required' });
   }
 
-  const key = `user:${username}`;
+  const userKey = `user:${username}`;
+  const pubKeyKey = `publicKey:${username}`;
+  const passwordHash = crypto.createHash('sha256').update(password).digest('hex');
 
-  // Проверяем, существует ли пользователь
-  const existingUser = await kv.get(key);
+  const existingUser = await kv.get(userKey);
 
   if (existingUser) {
-    // Пользователь существует – проверяем пароль
-    const passwordHash = crypto.createHash('sha256').update(password).digest('hex');
     if (existingUser.passwordHash !== passwordHash) {
       return res.status(401).json({ error: 'Invalid password' });
     }
-    // Обновляем публичный ключ и подписку (если изменились)
-    await kv.set(key, {
+    // Обновляем публичный ключ и подписку
+    await kv.set(userKey, {
       passwordHash,
       publicKey,
       subscription: subscription || existingUser.subscription || null,
     });
+    await kv.set(pubKeyKey, publicKey); // дублируем для быстрого доступа
     return res.status(200).json({ status: 'logged_in' });
   } else {
-    // Новый пользователь – регистрируем
-    const passwordHash = crypto.createHash('sha256').update(password).digest('hex');
-    await kv.set(key, {
+    await kv.set(userKey, {
       passwordHash,
       publicKey,
       subscription: subscription || null,
     });
+    await kv.set(pubKeyKey, publicKey);
     return res.status(200).json({ status: 'registered' });
   }
 }

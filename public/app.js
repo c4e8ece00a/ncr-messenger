@@ -190,7 +190,7 @@ async function processIncomingMessage(payload) {
   }
 }
 
-// Регистрируем service worker при загрузке (без push)
+// Регистрируем service worker при загрузке
 if ('serviceWorker' in navigator) {
   navigator.serviceWorker.register('/sw.js')
     .then(() => console.log('SW registered'))

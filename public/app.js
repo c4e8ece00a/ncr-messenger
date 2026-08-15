@@ -1,1066 +1,315 @@
-let pollingTimer = null;
-let pollingInProgress = false;
 let username = null;
 let privateKey = null;
 let publicKey = null;
+let pollingTimer = null;
+let pollingInProgress = false;
+let authInProgress = false;
 
-let sending = false;
+const $ = (id) => document.getElementById(id);
 
-const POLL_INTERVAL = 5000;
-
-/* =========================================================
-   DOM
-========================================================= */
-
-const loginScreen =
-  document.getElementById('login-screen');
-
-const chatScreen =
-  document.getElementById('chat-screen');
-
-const usernameInput =
-  document.getElementById('username-input');
-
-const passwordInput =
-  document.getElementById('password-input');
-
-const registerBtn =
-  document.getElementById('register-btn');
-
-const loginError =
-  document.getElementById('login-error');
-
-const currentUser =
-  document.getElementById('current-user');
-
-const logoutBtn =
-  document.getElementById('logout-btn');
-
-const recipientInput =
-  document.getElementById('recipient-input');
-
-const messageInput =
-  document.getElementById('message-input');
-
-const sendBtn =
-  document.getElementById('send-btn');
-
-const refreshBtn =
-  document.getElementById('refresh-btn');
-
-const messagesDiv =
-  document.getElementById('messages');
-
-const chatStatus =
-  document.getElementById('chat-status');
-
-/* =========================================================
-   Helpers
-========================================================= */
-
-function showLoginError(message) {
-  loginError.textContent = message || '';
-}
-
-function setChatStatus(message) {
-  if (chatStatus) {
-    chatStatus.textContent = message || '';
-  }
-}
-
-function scrollMessagesToBottom() {
-  messagesDiv.scrollTop =
-    messagesDiv.scrollHeight;
-}
-
-function setSendingState(value) {
-  sending = value;
-
-  sendBtn.disabled = value;
-
-  sendBtn.textContent =
-    value ? 'Отправка…' : 'Отправить';
-}
-
-/* =========================================================
-   KEY STORAGE
-========================================================= */
-
-/*
- * ВАЖНО:
- *
- * Старый код использовал:
- *
- * ncrlwe_keys
- *
- * для всех пользователей.
- *
- * Теперь ключ зависит от username.
- */
-
-function getKeyStorageName(name) {
+function keyStorageName(name) {
   return `ncrlwe_keys:${name}`;
 }
 
 function loadOrGenerateKeys(name) {
-  const storageName =
-    getKeyStorageName(name);
-
-  const stored =
-    localStorage.getItem(storageName);
+  const storageKey = keyStorageName(name);
+  const stored = localStorage.getItem(storageKey);
 
   if (stored) {
     try {
-      const parsed =
-        JSON.parse(stored);
-
-      if (
-        parsed &&
-        parsed.privateKey &&
-        parsed.publicKey
-      ) {
-        privateKey =
-          parsed.privateKey;
-
-        publicKey =
-          parsed.publicKey;
-
+      const parsed = JSON.parse(stored);
+      if (parsed?.privateKey && parsed?.publicKey) {
+        privateKey = parsed.privateKey;
+        publicKey = parsed.publicKey;
         return;
       }
-    } catch (error) {
-      console.error(
-        'Ошибка чтения ключей:',
-        error
-      );
+    } catch {
+      localStorage.removeItem(storageKey);
     }
-
-    localStorage.removeItem(
-      storageName
-    );
   }
 
-  const keys =
-    NCRLWE.generateKeypair();
-
-  privateKey =
-    keys.privateKey;
-
-  publicKey =
-    keys.publicKey;
-
-  localStorage.setItem(
-    storageName,
-    JSON.stringify({
-      privateKey,
-      publicKey
-    })
-  );
+  const keys = NCRLWE.generateKeypair();
+  privateKey = keys.privateKey;
+  publicKey = keys.publicKey;
+  localStorage.setItem(storageKey, JSON.stringify({ privateKey, publicKey }));
 }
-
-/* =========================================================
-   AES-GCM
-========================================================= */
 
 async function deriveAesKey(K) {
-  const bytes =
-    NCRLWE.matrixToBytes(K);
-
-  const hash =
-    await crypto.subtle.digest(
-      'SHA-256',
-      bytes
-    );
-
-  return crypto.subtle.importKey(
-    'raw',
-    hash,
-    {
-      name: 'AES-GCM'
-    },
-    false,
-    [
-      'encrypt',
-      'decrypt'
-    ]
-  );
+  const bytes = NCRLWE.matrixToBytes(K);
+  const hash = await crypto.subtle.digest('SHA-256', bytes);
+  return crypto.subtle.importKey('raw', hash, { name: 'AES-GCM' }, false, ['encrypt', 'decrypt']);
 }
 
-async function encryptMessage(
-  aesKey,
-  plaintext
-) {
-  const nonce =
-    crypto.getRandomValues(
-      new Uint8Array(12)
-    );
-
-  const encoded =
-    new TextEncoder().encode(
-      plaintext
-    );
-
-  const ciphertext =
-    await crypto.subtle.encrypt(
-      {
-        name: 'AES-GCM',
-        iv: nonce
-      },
-      aesKey,
-      encoded
-    );
-
+async function encryptMessage(aesKey, plaintext) {
+  const nonce = crypto.getRandomValues(new Uint8Array(12));
+  const encoded = new TextEncoder().encode(plaintext);
+  const ciphertext = await crypto.subtle.encrypt({ name: 'AES-GCM', iv: nonce }, aesKey, encoded);
   return {
     nonce: Array.from(nonce),
-    ciphertext: Array.from(
-      new Uint8Array(ciphertext)
-    )
+    ciphertext: Array.from(new Uint8Array(ciphertext))
   };
 }
 
-async function decryptMessage(
-  aesKey,
-  nonce,
-  ciphertext
-) {
-  if (
-    !Array.isArray(nonce) ||
-    !Array.isArray(ciphertext)
-  ) {
-    throw new Error(
-      'Повреждённый формат сообщения'
-    );
-  }
-
-  const decoded =
-    await crypto.subtle.decrypt(
-      {
-        name: 'AES-GCM',
-        iv: new Uint8Array(nonce)
-      },
-      aesKey,
-      new Uint8Array(ciphertext)
-    );
-
-  return new TextDecoder().decode(
-    decoded
+async function decryptMessage(aesKey, nonce, ciphertext) {
+  const decoded = await crypto.subtle.decrypt(
+    { name: 'AES-GCM', iv: new Uint8Array(nonce) },
+    aesKey,
+    new Uint8Array(ciphertext)
   );
+  return new TextDecoder().decode(decoded);
 }
 
-/* =========================================================
-   API
-========================================================= */
-
-async function parseApiError(res) {
-  const text =
-    await res.text();
-
-  try {
-    const json =
-      JSON.parse(text);
-
-    return (
-      json.error ||
-      `Ошибка HTTP ${res.status}`
-    );
-  } catch {
-    return (
-      text ||
-      `Ошибка HTTP ${res.status}`
-    );
-  }
+async function readJsonResponse(res) {
+  const text = await res.text();
+  let data = {};
+  try { data = text ? JSON.parse(text) : {}; } catch {}
+  if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+  return data;
 }
 
-async function apiAuth(
-  username,
-  password,
-  publicKey
-) {
-  const res =
-    await fetch('/api/auth', {
-      method: 'POST',
-      headers: {
-        'Content-Type':
-          'application/json'
-      },
-      body: JSON.stringify({
-        username,
-        password,
-        publicKey
-      })
-    });
-
-  if (!res.ok) {
-    throw new Error(
-      await parseApiError(res)
-    );
-  }
-
-  return res.json();
+async function apiAuth(name, password, key) {
+  const res = await fetch('/api/auth', {
+    method: 'POST',
+    cache: 'no-store',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ username: name, password, publicKey: key })
+  });
+  return readJsonResponse(res);
 }
 
 async function apiGetPublicKey(name) {
-  const res =
-    await fetch(
-      `/api/publicKey?username=${encodeURIComponent(name)}`
-    );
-
-  if (!res.ok) {
-    throw new Error(
-      await parseApiError(res)
-    );
-  }
-
-  const data =
-    await res.json();
-
+  const url = `/api/publicKey?username=${encodeURIComponent(name)}&_=${Date.now()}`;
+  const res = await fetch(url, { method: 'GET', cache: 'no-store' });
+  const data = await readJsonResponse(res);
   return data.publicKey;
 }
 
-async function apiSend(
-  sender,
-  recipient,
-  payload
-) {
-  const res =
-    await fetch('/api/send', {
-      method: 'POST',
-      headers: {
-        'Content-Type':
-          'application/json'
-      },
-      body: JSON.stringify({
-        sender,
-        recipient,
-        payload
-      })
-    });
-
-  if (!res.ok) {
-    throw new Error(
-      await parseApiError(res)
-    );
-  }
-
-  return res.json();
-}
-
-async function apiGetMessages(username) {
-  const url =
-    `/api/messages?username=${encodeURIComponent(username)}&_=${Date.now()}`;
-
-  const res = await fetch(url, {
-    method: 'GET',
-    cache: 'no-store'
+async function apiSend(recipient, payload) {
+  const res = await fetch('/api/send', {
+    method: 'POST',
+    cache: 'no-store',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ sender: username, recipient, payload })
   });
-
-  if (!res.ok) {
-    const errorText = await res.text();
-
-    let errorMessage = 'Ошибка сервера';
-
-    try {
-      const errorJson = JSON.parse(errorText);
-      errorMessage = errorJson.error || errorMessage;
-    } catch {}
-
-    throw new Error(errorMessage);
-  }
-
-  return res.json();
+  return readJsonResponse(res);
 }
 
-async function apiAck(
-  name,
-  messageId
-) {
-  const res =
-    await fetch('/api/ack', {
-      method: 'POST',
-      headers: {
-        'Content-Type':
-          'application/json'
-      },
-      body: JSON.stringify({
-        username: name,
-        messageId
-      })
-    });
-
-  if (!res.ok) {
-    throw new Error(
-      await parseApiError(res)
-    );
-  }
-
-  return res.json();
+async function apiGetMessages(name) {
+  const url = `/api/messages?username=${encodeURIComponent(name)}&_=${Date.now()}`;
+  const res = await fetch(url, { method: 'GET', cache: 'no-store' });
+  return readJsonResponse(res);
 }
 
-/* =========================================================
-   LOGIN
-========================================================= */
+function setStatus(text, isError = false) {
+  $('status-bar').textContent = text || '';
+  $('status-bar').classList.toggle('error', isError);
+}
 
-registerBtn.addEventListener(
-  'click',
-  login
-);
+function showChat(name) {
+  $('current-user').textContent = name;
+  $('user-avatar').textContent = name.charAt(0).toUpperCase();
+  $('login-screen').classList.add('hidden');
+  $('chat-screen').classList.remove('hidden');
+  setStatus('Подключено');
+}
 
-passwordInput.addEventListener(
-  'keydown',
-  event => {
-    if (event.key === 'Enter') {
-      login();
-    }
-  }
-);
+function showLogin() {
+  $('chat-screen').classList.add('hidden');
+  $('login-screen').classList.remove('hidden');
+}
 
-usernameInput.addEventListener(
-  'keydown',
-  event => {
-    if (event.key === 'Enter') {
-      passwordInput.focus();
-    }
-  }
-);
+function formatTime(timestamp) {
+  if (!timestamp) return '';
+  return new Intl.DateTimeFormat('ru-RU', { hour: '2-digit', minute: '2-digit' }).format(timestamp);
+}
 
-async function login() {
-  const name =
-    usernameInput.value.trim();
+function addMessage(text, { outgoing, sender, timestamp }) {
+  const empty = $('empty-state');
+  if (empty) empty.remove();
 
-  const password =
-    passwordInput.value;
+  const wrap = document.createElement('div');
+  wrap.className = `message-wrap ${outgoing ? 'outgoing' : 'incoming'}`;
 
-  showLoginError('');
+  const bubble = document.createElement('div');
+  bubble.className = 'message';
 
-  if (!name || !password) {
-    showLoginError(
-      'Введите имя и пароль'
-    );
-    return;
+  if (!outgoing && sender) {
+    const senderEl = document.createElement('div');
+    senderEl.className = 'message-sender';
+    senderEl.textContent = sender;
+    bubble.appendChild(senderEl);
   }
 
-  registerBtn.disabled = true;
-  registerBtn.textContent =
-    'Подключение…';
+  const textEl = document.createElement('div');
+  textEl.textContent = text;
+  bubble.appendChild(textEl);
 
+  const meta = document.createElement('div');
+  meta.className = 'message-meta';
+  meta.textContent = formatTime(timestamp || Date.now());
+  bubble.appendChild(meta);
+
+  wrap.appendChild(bubble);
+  $('messages').appendChild(wrap);
+  $('messages').scrollTop = $('messages').scrollHeight;
+}
+
+async function processIncomingMessage(payload) {
+  if (!payload?.U || !payload?.V || !payload?.nonce || !payload?.ciphertext) {
+    throw new Error('Получен повреждённый пакет сообщения');
+  }
+
+  const K = NCRLWE.decapsulate(privateKey, { U: payload.U, V: payload.V });
+  const aesKey = await deriveAesKey(K);
+  const plaintext = await decryptMessage(aesKey, payload.nonce, payload.ciphertext);
+
+  addMessage(plaintext, {
+    outgoing: false,
+    sender: payload.sender || 'Неизвестный',
+    timestamp: payload.createdAt
+  });
+}
+
+async function checkMessages() {
+  if (!username || pollingInProgress) return;
+
+  pollingInProgress = true;
   try {
-    /*
-     * Сначала загружаем локальную пару ключей.
-     */
-    loadOrGenerateKeys(name);
+    const data = await apiGetMessages(username);
+    const messages = Array.isArray(data.messages) ? data.messages : [];
 
-    /*
-     * Сервер проверит:
-     *
-     * новый аккаунт -> зарегистрировать
-     *
-     * существующий аккаунт ->
-     * проверить пароль и совпадение publicKey
-     */
-    const result =
-      await apiAuth(
-        name,
-        password,
-        publicKey
-      );
+    let failed = 0;
+    for (const payload of messages) {
+      try {
+        await processIncomingMessage(payload);
+      } catch (error) {
+        failed++;
+        console.error('Decryption error:', error, payload);
+      }
+    }
 
-    username =
-      result.username || name;
-
-    currentUser.textContent =
-      username;
-
-    loginScreen.classList.add(
-      'hidden'
-    );
-
-    chatScreen.classList.remove(
-      'hidden'
-    );
-
-    setChatStatus(
-      'Подключено'
-    );
-
-    recipientInput.focus();
-
-    startPolling();
-
-    await checkMessages();
-
+    setStatus(failed ? `Не удалось расшифровать: ${failed}` : 'Подключено', failed > 0);
   } catch (error) {
-    console.error(
-      'LOGIN ERROR:',
-      error
-    );
-
-    showLoginError(
-      error.message
-    );
-
+    console.error('Polling error:', error);
+    setStatus(`Ошибка связи: ${error.message}`, true);
   } finally {
-    registerBtn.disabled = false;
-    registerBtn.textContent =
-      'Войти / Регистрация';
-  }
-}
-
-/* =========================================================
-   LOGOUT
-========================================================= */
-
-logoutBtn.addEventListener(
-  'click',
-  logout
-);
-
-function logout() {
-  stopPolling();
-
-  username = null;
-  privateKey = null;
-  publicKey = null;
-
-  chatScreen.classList.add(
-    'hidden'
-  );
-
-  loginScreen.classList.remove(
-    'hidden'
-  );
-
-  usernameInput.value = '';
-  passwordInput.value = '';
-
-  messagesDiv.innerHTML = '';
-
-  setChatStatus('');
-  showLoginError('');
-
-  usernameInput.focus();
-}
-
-/* =========================================================
-   SEND
-========================================================= */
-
-sendBtn.addEventListener(
-  'click',
-  sendMessage
-);
-
-messageInput.addEventListener(
-  'keydown',
-  event => {
-
-    /*
-     * Enter отправляет.
-     *
-     * Shift + Enter:
-     * новая строка.
-     */
-    if (
-      event.key === 'Enter' &&
-      !event.shiftKey
-    ) {
-      event.preventDefault();
-      sendMessage();
+    pollingInProgress = false;
+    if (username) {
+      clearTimeout(pollingTimer);
+      pollingTimer = setTimeout(checkMessages, 3000);
     }
   }
-);
+}
 
 async function sendMessage() {
-  if (sending) {
-    return;
-  }
+  if (!username) return;
 
-  const recipient =
-    recipientInput.value.trim();
+  const recipient = $('recipient-input').value.trim();
+  const message = $('message-input').value.trim();
+  if (!recipient || !message) return;
 
-  const message =
-    messageInput.value.trim();
-
-  if (!recipient) {
-    recipientInput.focus();
-    return;
-  }
-
-  if (!message) {
-    messageInput.focus();
-    return;
-  }
-
-  if (!username) {
-    return;
-  }
-
-  setSendingState(true);
+  $('send-btn').disabled = true;
+  setStatus('Шифрование и отправка…');
 
   try {
-    setChatStatus(
-      `Получаем ключ ${recipient}…`
-    );
-
-    const recipientPub =
-      await apiGetPublicKey(
-        recipient
-      );
-
-    /*
-     * Создаём уникальный сеансовый ключ.
-     */
-    const {
-      ciphertext,
-      K
-    } = NCRLWE.encapsulate(
-      recipientPub
-    );
-
-    const aesKey =
-      await deriveAesKey(K);
-
-    const encrypted =
-      await encryptMessage(
-        aesKey,
-        message
-      );
+    const recipientPub = await apiGetPublicKey(recipient);
+    const { ciphertext, K } = NCRLWE.encapsulate(recipientPub);
+    const aesKey = await deriveAesKey(K);
+    const encrypted = await encryptMessage(aesKey, message);
 
     const payload = {
       U: ciphertext.U,
       V: ciphertext.V,
       nonce: encrypted.nonce,
-      ciphertext:
-        encrypted.ciphertext
+      ciphertext: encrypted.ciphertext
     };
 
-    setChatStatus(
-      'Отправляем…'
-    );
+    await apiSend(recipient, payload);
 
-    const result =
-      await apiSend(
-        username,
-        recipient,
-        payload
-      );
-
-    /*
-     * Показываем исходящее сообщение
-     * сразу, не ожидая polling.
-     */
-    addMessageToChat({
-      id: result.id,
-      sender: username,
-      recipient,
-      text: message,
-      outgoing: true,
-      createdAt: Date.now()
-    });
-
-    messageInput.value = '';
-
-    setChatStatus(
-      'Доставлено на сервер'
-    );
-
-    scrollMessagesToBottom();
-
+    addMessage(message, { outgoing: true, timestamp: Date.now() });
+    $('message-input').value = '';
+    autoGrowTextarea();
+    setStatus(`Отправлено пользователю ${recipient}`);
   } catch (error) {
-    console.error(
-      'SEND ERROR:',
-      error
-    );
-
-    setChatStatus(
-      'Ошибка отправки'
-    );
-
-    addSystemMessage(
-      `Ошибка отправки: ${error.message}`
-    );
-
+    console.error('Send error:', error);
+    setStatus(`Ошибка отправки: ${error.message}`, true);
   } finally {
-    setSendingState(false);
-
-    messageInput.focus();
+    $('send-btn').disabled = false;
+    $('message-input').focus();
   }
 }
 
-/* =========================================================
-   POLLING
-========================================================= */
-
-function startPolling() {
-  stopPolling();
-
-  pollingTimer =
-    setInterval(
-      checkMessages,
-      POLL_INTERVAL
-    );
+function autoGrowTextarea() {
+  const textarea = $('message-input');
+  textarea.style.height = 'auto';
+  textarea.style.height = `${Math.min(textarea.scrollHeight, 140)}px`;
 }
 
-function stopPolling() {
-  if (pollingTimer) {
-    clearInterval(
-      pollingTimer
-    );
+$('login-form').addEventListener('submit', async (event) => {
+  event.preventDefault();
+  if (authInProgress) return;
 
-    pollingTimer = null;
-  }
-}
+  const name = $('username-input').value.trim();
+  const password = $('password-input').value;
+  $('login-error').textContent = '';
 
-async function checkMessages() {
-  if (!username) return;
+  if (!name || !password) return;
 
-  // Не допускаем параллельные запросы.
-  if (pollingInProgress) return;
-
-  pollingInProgress = true;
+  authInProgress = true;
+  $('login-btn').disabled = true;
+  $('login-btn').textContent = 'Подключение…';
 
   try {
-    const data = await apiGetMessages(username);
+    loadOrGenerateKeys(name);
+    await apiAuth(name, password, publicKey);
 
-    if (
-      data &&
-      Array.isArray(data.messages) &&
-      data.messages.length > 0
-    ) {
-      for (const payload of data.messages) {
-        await processIncomingMessage(payload);
-      }
-    }
-
-  } catch (e) {
-    console.error('Polling error:', e);
-
-  } finally {
-    pollingInProgress = false;
-
-    if (username) {
-      clearTimeout(pollingTimer);
-
-      pollingTimer = setTimeout(
-        checkMessages,
-        3000
-      );
-    }
-  }
-}
-
-/* =========================================================
-   RECEIVE MESSAGE
-========================================================= */
-
-async function processIncomingMessage(
-  message
-) {
-  /*
-   * Проверяем, не отображали ли
-   * уже это сообщение.
-   */
-  const existing =
-    document.querySelector(
-      `[data-message-id="${CSS.escape(message.id)}"]`
-    );
-
-  if (existing) {
-    /*
-     * Если оно уже есть на экране,
-     * подтверждаем его.
-     */
-    try {
-      await apiAck(
-        username,
-        message.id
-      );
-    } catch (error) {
-      console.error(
-        'ACK ERROR:',
-        error
-      );
-    }
-
-    return;
-  }
-
-  try {
-    console.log(
-      'Получено сообщение:',
-      message
-    );
-
-    if (
-      !message.payload
-    ) {
-      throw new Error(
-        'У сообщения отсутствует payload'
-      );
-    }
-
-    const payload =
-      message.payload;
-
-    /*
-     * 1. NCR-LWE
-     */
-    const K =
-      NCRLWE.decapsulate(
-        privateKey,
-        {
-          U: payload.U,
-          V: payload.V
-        }
-      );
-
-    /*
-     * 2. Получаем AES ключ
-     */
-    const aesKey =
-      await deriveAesKey(K);
-
-    /*
-     * 3. AES-GCM
-     */
-    const plaintext =
-      await decryptMessage(
-        aesKey,
-        payload.nonce,
-        payload.ciphertext
-      );
-
-    /*
-     * Только теперь считаем сообщение
-     * успешно доставленным.
-     */
-    addMessageToChat({
-      id: message.id,
-      sender: message.sender,
-      recipient: message.recipient,
-      text: plaintext,
-      outgoing:
-        message.sender === username,
-      createdAt:
-        message.createdAt
-    });
-
-    /*
-     * Подтверждаем серверу успешную
-     * обработку.
-     */
-    await apiAck(
-      username,
-      message.id
-    );
-
-    console.log(
-      'Сообщение успешно расшифровано:',
-      plaintext
-    );
-
-    scrollMessagesToBottom();
-
+    username = name;
+    localStorage.setItem('ncrlwe_last_username', name);
+    showChat(name);
+    await checkMessages();
   } catch (error) {
-    /*
-     * ВАЖНО:
-     *
-     * ACK здесь НЕ вызываем.
-     *
-     * Сообщение останется в Redis
-     * и будет повторно доступно.
-     */
-    console.error(
-      'DECRYPTION ERROR:',
-      error,
-      message
-    );
-
-    addSystemMessage(
-      `Не удалось расшифровать сообщение от ${message.sender || 'неизвестного пользователя'}: ${error.message}`
-    );
+    console.error('Login error:', error);
+    $('login-error').textContent = error.message;
+  } finally {
+    authInProgress = false;
+    $('login-btn').disabled = false;
+    $('login-btn').textContent = 'Войти / создать аккаунт';
   }
-}
+});
 
-/* =========================================================
-   UI
-========================================================= */
+$('logout-btn').addEventListener('click', () => {
+  username = null;
+  clearTimeout(pollingTimer);
+  pollingTimer = null;
+  privateKey = null;
+  publicKey = null;
+  $('messages').innerHTML = `
+    <div id="empty-state" class="empty-state">
+      <div class="empty-icon">✉</div>
+      <h2>Сообщений пока нет</h2>
+      <p>Введите имя получателя ниже и отправьте первое сообщение.</p>
+    </div>`;
+  $('login-error').textContent = '';
+  showLogin();
+});
 
-function formatTime(timestamp) {
-  if (!timestamp) {
-    return '';
+$('composer').addEventListener('submit', (event) => {
+  event.preventDefault();
+  sendMessage();
+});
+
+$('message-input').addEventListener('input', autoGrowTextarea);
+$('message-input').addEventListener('keydown', (event) => {
+  if (event.key === 'Enter' && !event.shiftKey) {
+    event.preventDefault();
+    sendMessage();
   }
+});
 
-  return new Date(
-    timestamp
-  ).toLocaleTimeString(
-    [],
-    {
-      hour: '2-digit',
-      minute: '2-digit'
-    }
-  );
-}
+// Restore the last username in the form, but never auto-login without a password.
+const lastUsername = localStorage.getItem('ncrlwe_last_username');
+if (lastUsername) $('username-input').value = lastUsername;
 
-function addMessageToChat({
-  id,
-  sender,
-  text,
-  outgoing,
-  createdAt
-}) {
-  /*
-   * Не добавляем дубликаты.
-   */
-  if (
-    document.querySelector(
-      `[data-message-id="${CSS.escape(id)}"]`
-    )
-  ) {
-    return;
-  }
-
-  const wrapper =
-    document.createElement(
-      'div'
-    );
-
-  wrapper.className =
-    outgoing
-      ? 'message-row outgoing'
-      : 'message-row incoming';
-
-  wrapper.dataset.messageId =
-    id;
-
-  const bubble =
-    document.createElement(
-      'div'
-    );
-
-  bubble.className =
-    'message';
-
-  const senderElement =
-    document.createElement(
-      'div'
-    );
-
-  senderElement.className =
-    'message-sender';
-
-  senderElement.textContent =
-    outgoing
-      ? 'Вы'
-      : sender || 'Пользователь';
-
-  const textElement =
-    document.createElement(
-      'div'
-    );
-
-  textElement.className =
-    'message-text';
-
-  /*
-   * textContent, а не innerHTML.
-   *
-   * Это важно для защиты от HTML/JS
-   * внутри сообщения.
-   */
-  textElement.textContent =
-    text;
-
-  const timeElement =
-    document.createElement(
-      'div'
-    );
-
-  timeElement.className =
-    'message-time';
-
-  timeElement.textContent =
-    formatTime(createdAt);
-
-  bubble.appendChild(
-    senderElement
-  );
-
-  bubble.appendChild(
-    textElement
-  );
-
-  bubble.appendChild(
-    timeElement
-  );
-
-  wrapper.appendChild(
-    bubble
-  );
-
-  messagesDiv.appendChild(
-    wrapper
-  );
-
-  scrollMessagesToBottom();
-}
-
-function addSystemMessage(text) {
-  const div =
-    document.createElement(
-      'div'
-    );
-
-  div.className =
-    'system-message';
-
-  div.textContent =
-    text;
-
-  messagesDiv.appendChild(
-    div
-  );
-
-  scrollMessagesToBottom();
-}
-
-/* =========================================================
-   REFRESH
-========================================================= */
-
-if (refreshBtn) {
-  refreshBtn.addEventListener(
-    'click',
-    async () => {
-      await checkMessages();
-    }
-  );
-}
-
-/* =========================================================
-   SERVICE WORKER
-========================================================= */
-
-if (
-  'serviceWorker' in navigator
-) {
-  window.addEventListener(
-    'load',
-    () => {
-      navigator.serviceWorker
-        .register('/sw.js')
-        .then(
-          registration => {
-            console.log(
-              'Service Worker registered:',
-              registration.scope
-            );
-          }
-        )
-        .catch(error => {
-          console.error(
-            'Service Worker error:',
-            error
-          );
-        });
-    }
-  );
+if ('serviceWorker' in navigator) {
+  navigator.serviceWorker.register('/sw.js').catch((error) => console.warn('SW:', error));
 }

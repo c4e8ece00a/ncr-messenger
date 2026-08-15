@@ -135,24 +135,19 @@ function generateKeypair() {
 }
 
 function encapsulate(publicKey) {
-  validateMatrix(publicKey.A, 'A');
-  validateMatrix(publicKey.B, 'B');
+  const { A, B } = publicKey;
 
-  const {
-    A,
-    B
-  } = publicKey;
+  // Логические биты.
+  const K = Array.from({ length: N }, () =>
+    Array.from(
+      { length: N },
+      () => Math.floor(Math.random() * 2)
+    )
+  );
 
-  /*
-   * Сессионный ключ.
-   */
-  const K = Array.from(
-    { length: N },
-    () =>
-      Array.from(
-        { length: N },
-        () => Math.floor(Math.random() * 2)
-      )
+  // В шифротексте бит 1 кодируем как Q/2.
+  const encodedK = K.map(row =>
+    row.map(bit => bit === 1 ? Math.floor(Q / 2) : 0)
   );
 
   const R1 = smallMatrix();
@@ -169,7 +164,7 @@ function encapsulate(publicKey) {
       matMul(R1, B),
       R2
     ),
-    K
+    encodedK
   );
 
   return {
@@ -177,36 +172,15 @@ function encapsulate(publicKey) {
       U,
       V
     },
+
+    // Именно исходный K используется отправителем
+    // для получения AES-ключа.
     K
   };
 }
 
 function decapsulate(privateKey, ciphertext) {
-  validateMatrix(
-    privateKey,
-    'privateKey'
-  );
-
-  if (!ciphertext) {
-    throw new Error(
-      'Отсутствует ciphertext'
-    );
-  }
-
-  validateMatrix(
-    ciphertext.U,
-    'U'
-  );
-
-  validateMatrix(
-    ciphertext.V,
-    'V'
-  );
-
-  const {
-    U,
-    V
-  } = ciphertext;
+  const { U, V } = ciphertext;
 
   const M = matSub(
     V,
@@ -218,35 +192,17 @@ function decapsulate(privateKey, ciphertext) {
     () => new Array(N).fill(0)
   );
 
+  const HALF = Math.floor(Q / 2);
+
   for (let i = 0; i < N; i++) {
     for (let j = 0; j < N; j++) {
+      const v = center(M[i][j]);
 
-      const value = center(
-        M[i][j]
-      );
+      // Расстояние до точки 0.
+      const distanceToZero = Math.abs(v);
 
-      /*
-       * Вместо старой схемы:
-       *
-       * if (...) 0
-       * else if (...) 1
-       * else throw
-       *
-       * выбираем ближайший допустимый символ.
-       *
-       * Для данной демонстрационной схемы
-       * допустимы 0 и 1.
-       */
-
-      const distanceToZero =
-        Math.abs(value);
-
-      const distanceToOne =
-        Math.min(
-          Math.abs(value - 1),
-          Math.abs(value + Q - 1),
-          Math.abs(value - Q - 1)
-        );
+      // Расстояние до Q/2 с учётом центрированного диапазона.
+      const distanceToOne = Math.abs(v - HALF);
 
       K_rec[i][j] =
         distanceToZero <= distanceToOne

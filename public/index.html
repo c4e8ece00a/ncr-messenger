@@ -1,264 +1,76 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="ru">
 <head>
   <meta charset="UTF-8">
-
-  <meta
-    name="viewport"
-    content="width=device-width, initial-scale=1.0, viewport-fit=cover, user-scalable=no"
-  >
-
-  <meta
-    name="theme-color"
-    content="#111827"
-  >
-
-  <meta
-    name="apple-mobile-web-app-capable"
-    content="yes"
-  >
-
-  <meta
-    name="apple-mobile-web-app-status-bar-style"
-    content="black-translucent"
-  >
-
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#111827">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="NCR Messenger">
   <title>NCR Messenger</title>
-
-  <link
-    rel="manifest"
-    href="/manifest.json"
-  >
-
-  <link
-    rel="stylesheet"
-    href="/style.css"
-  >
-
-  <link
-    rel="apple-touch-icon"
-    href="/icons/icon-192.png"
-  >
+  <link rel="manifest" href="/manifest.json">
+  <link rel="stylesheet" href="/style.css">
 </head>
-
 <body>
-
   <div id="app">
-
-    <!-- =========================
-         LOGIN
-    ========================== -->
-
-    <section
-      id="login-screen"
-      class="screen login-screen"
-    >
-
+    <section id="login-screen" class="screen login-screen">
       <div class="login-card">
-
-        <div class="logo">
-          NCR
-        </div>
-
+        <div class="logo">N</div>
         <h1>NCR Messenger</h1>
+        <p class="muted">Простой зашифрованный чат</p>
 
-        <p class="subtitle">
-          Защищённый демонстрационный
-          мессенджер
-        </p>
-
-        <label
-          class="field-label"
-          for="username-input"
-        >
-          Имя пользователя
-        </label>
-
-        <input
-          type="text"
-          id="username-input"
-          placeholder="Например: Dmitry"
-          autocomplete="username"
-          autocapitalize="none"
-          spellcheck="false"
-        >
-
-        <label
-          class="field-label"
-          for="password-input"
-        >
-          Пароль
-        </label>
-
-        <input
-          type="password"
-          id="password-input"
-          placeholder="Пароль"
-          autocomplete="current-password"
-        >
-
-        <button
-          id="register-btn"
-          class="primary-button"
-        >
-          Войти / Регистрация
-        </button>
-
-        <p
-          id="login-error"
-          class="error"
-          role="alert"
-        ></p>
-
-        <p class="hint">
-          Если имя свободно — будет создан
-          новый аккаунт. Если имя уже занято —
-          пароль должен совпадать.
-        </p>
-
+        <form id="login-form" autocomplete="on">
+          <label>
+            <span>Имя пользователя</span>
+            <input id="username-input" name="username" type="text" inputmode="text" autocomplete="username" autocapitalize="none" spellcheck="false" maxlength="32" placeholder="например, Kate1" required>
+          </label>
+          <label>
+            <span>Пароль</span>
+            <input id="password-input" name="password" type="password" autocomplete="current-password" minlength="4" maxlength="128" placeholder="Минимум 4 символа" required>
+          </label>
+          <button id="login-btn" class="primary full" type="submit">Войти / создать аккаунт</button>
+        </form>
+        <p id="login-error" class="error" role="alert"></p>
+        <p class="hint">Ключ шифрования хранится в этом браузере. Не очищайте данные сайта, если хотите сохранить доступ к старым сообщениям.</p>
       </div>
-
     </section>
 
-
-    <!-- =========================
-         CHAT
-    ========================== -->
-
-    <section
-      id="chat-screen"
-      class="screen chat-screen hidden"
-    >
-
+    <section id="chat-screen" class="screen chat-screen hidden">
       <header class="chat-header">
-
-        <div class="user-info">
-
-          <div class="avatar">
-            <span id="avatar-letter">
-              ?
-            </span>
-          </div>
-
+        <div class="identity">
+          <div class="avatar" id="user-avatar">N</div>
           <div>
-
-            <div
-              id="current-user"
-              class="current-user"
-            ></div>
-
-            <div
-              id="chat-status"
-              class="chat-status"
-            >
-              Подключение…
-            </div>
-
+            <strong>NCR Messenger</strong>
+            <div class="online"><span></span><span id="current-user"></span></div>
           </div>
-
         </div>
-
-        <div class="header-actions">
-
-          <button
-            id="refresh-btn"
-            class="icon-button"
-            type="button"
-            aria-label="Обновить сообщения"
-            title="Обновить"
-          >
-            ↻
-          </button>
-
-          <button
-            id="logout-btn"
-            class="secondary-button"
-            type="button"
-          >
-            Выйти
-          </button>
-
-        </div>
-
+        <button id="logout-btn" class="icon-button" type="button" aria-label="Выйти">Выйти</button>
       </header>
 
-
-      <main
-        id="messages"
-        class="messages"
-      >
-
-        <div class="empty-chat">
-          <div class="empty-icon">
-            💬
-          </div>
-
-          <strong>
-            Пока нет сообщений
-          </strong>
-
-          <span>
-            Введите имя получателя ниже
-            и отправьте сообщение.
-          </span>
+      <main id="messages" class="messages" aria-live="polite">
+        <div id="empty-state" class="empty-state">
+          <div class="empty-icon">✉</div>
+          <h2>Сообщений пока нет</h2>
+          <p>Введите имя получателя ниже и отправьте первое сообщение.</p>
         </div>
-
       </main>
 
+      <div id="status-bar" class="status-bar" aria-live="polite"></div>
 
-      <footer class="composer">
-
-        <div class="recipient-line">
-
-          <label for="recipient-input">
-            Кому
-          </label>
-
-          <input
-            type="text"
-            id="recipient-input"
-            placeholder="Имя пользователя"
-            autocomplete="off"
-            autocapitalize="none"
-            spellcheck="false"
-          >
-
+      <form id="composer" class="composer">
+        <div class="recipient-row">
+          <label for="recipient-input">Получатель</label>
+          <input id="recipient-input" type="text" maxlength="32" autocomplete="off" autocapitalize="none" spellcheck="false" placeholder="Имя пользователя">
         </div>
-
-
-        <div class="message-line">
-
-          <textarea
-            id="message-input"
-            rows="1"
-            placeholder="Напишите сообщение…"
-            autocomplete="off"
-            spellcheck="true"
-          ></textarea>
-
-          <button
-            id="send-btn"
-            class="send-button"
-            type="button"
-          >
-            Отправить
-          </button>
-
+        <div class="message-row">
+          <textarea id="message-input" rows="1" maxlength="4000" placeholder="Напишите сообщение…"></textarea>
+          <button id="send-btn" class="send-button" type="submit" aria-label="Отправить">➤</button>
         </div>
-
-        <div class="composer-hint">
-          Enter — отправить · Shift + Enter —
-          новая строка
-        </div>
-
-      </footer>
-
+      </form>
     </section>
-
   </div>
 
   <script src="/ncr-lwe.js"></script>
   <script src="/app.js"></script>
-
 </body>
 </html>

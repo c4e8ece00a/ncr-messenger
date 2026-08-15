@@ -1,9 +1,9 @@
+let pollingTimer = null;
+let pollingInProgress = false;
 let username = null;
 let privateKey = null;
 let publicKey = null;
 
-let pollingTimer = null;
-let pollingInProgress = false;
 let sending = false;
 
 const POLL_INTERVAL = 5000;
@@ -344,19 +344,26 @@ async function apiSend(
   return res.json();
 }
 
-async function apiGetMessages(name) {
-  const res =
-    await fetch(
-      `/api/messages?username=${encodeURIComponent(name)}`,
-      {
-        cache: 'no-store'
-      }
-    );
+async function apiGetMessages(username) {
+  const url =
+    `/api/messages?username=${encodeURIComponent(username)}&_=${Date.now()}`;
+
+  const res = await fetch(url, {
+    method: 'GET',
+    cache: 'no-store'
+  });
 
   if (!res.ok) {
-    throw new Error(
-      await parseApiError(res)
-    );
+    const errorText = await res.text();
+
+    let errorMessage = 'Ошибка сервера';
+
+    try {
+      const errorJson = JSON.parse(errorText);
+      errorMessage = errorJson.error || errorMessage;
+    } catch {}
+
+    throw new Error(errorMessage);
   }
 
   return res.json();
@@ -703,50 +710,40 @@ function stopPolling() {
 }
 
 async function checkMessages() {
-  if (
-    !username ||
-    pollingInProgress
-  ) {
-    return;
-  }
+  if (!username) return;
+
+  // Не допускаем параллельные запросы.
+  if (pollingInProgress) return;
 
   pollingInProgress = true;
 
   try {
-    const data =
-      await apiGetMessages(
-        username
-      );
-
-    for (
-      const message
-      of data.messages || []
-    ) {
-      await processIncomingMessage(
-        message
-      );
-    }
+    const data = await apiGetMessages(username);
 
     if (
-      (data.messages || []).length > 0
+      data &&
+      Array.isArray(data.messages) &&
+      data.messages.length > 0
     ) {
-      setChatStatus(
-        'Сообщения обновлены'
-      );
+      for (const payload of data.messages) {
+        await processIncomingMessage(payload);
+      }
     }
 
-  } catch (error) {
-    console.error(
-      'POLLING ERROR:',
-      error
-    );
-
-    setChatStatus(
-      'Нет связи с сервером'
-    );
+  } catch (e) {
+    console.error('Polling error:', e);
 
   } finally {
     pollingInProgress = false;
+
+    if (username) {
+      clearTimeout(pollingTimer);
+
+      pollingTimer = setTimeout(
+        checkMessages,
+        3000
+      );
+    }
   }
 }
 

@@ -1,14 +1,9 @@
-/*
- * NCR-LWE DEMO
- *
- * ВАЖНО:
- * Это демонстрационная реализация.
- * Не использовать для реальной криптографической защиты.
- */
-
+// NCR-LWE demo primitive.
+// IMPORTANT: this is an educational prototype, NOT production cryptography.
 const N = 8;
 const Q = 257;
 const SMALL_BOUND = 1;
+const MESSAGE_ONE = Math.floor(Q / 2); // 128
 
 function mod(n, m = Q) {
   return ((n % m) + m) % m;
@@ -16,72 +11,55 @@ function mod(n, m = Q) {
 
 function center(v) {
   v = mod(v);
+  return v > Math.floor(Q / 2) ? v - Q : v;
+}
 
-  return v > Q / 2
-    ? v - Q
-    : v;
+function randomInt(maxExclusive) {
+  if (maxExclusive <= 0) throw new Error('Invalid random range');
+  const limit = Math.floor(0x100000000 / maxExclusive) * maxExclusive;
+  const buf = new Uint32Array(1);
+  do {
+    crypto.getRandomValues(buf);
+  } while (buf[0] >= limit);
+  return buf[0] % maxExclusive;
 }
 
 function uniformMatrix() {
-  return Array.from(
-    { length: N },
-    () =>
-      Array.from(
-        { length: N },
-        () => Math.floor(Math.random() * Q)
-      )
+  return Array.from({ length: N }, () =>
+    Array.from({ length: N }, () => randomInt(Q))
   );
 }
 
 function smallMatrix() {
-  return Array.from(
-    { length: N },
-    () =>
-      Array.from(
-        { length: N },
-        () =>
-          Math.floor(
-            Math.random() * (2 * SMALL_BOUND + 1)
-          ) - SMALL_BOUND
-      )
+  return Array.from({ length: N }, () =>
+    Array.from({ length: N }, () => randomInt(2 * SMALL_BOUND + 1) - SMALL_BOUND)
+  );
+}
+
+function bitMatrix() {
+  return Array.from({ length: N }, () =>
+    Array.from({ length: N }, () => randomInt(2))
   );
 }
 
 function matAdd(A, B) {
-  return A.map((row, i) =>
-    row.map((value, j) =>
-      mod(value + B[i][j])
-    )
-  );
+  return A.map((row, i) => row.map((value, j) => mod(value + B[i][j])));
 }
 
 function matSub(A, B) {
-  return A.map((row, i) =>
-    row.map((value, j) =>
-      mod(value - B[i][j])
-    )
-  );
+  return A.map((row, i) => row.map((value, j) => mod(value - B[i][j])));
 }
 
 function matMul(A, B) {
-  const result = Array.from(
-    { length: N },
-    () => new Array(N).fill(0)
-  );
+  const result = Array.from({ length: N }, () => new Array(N).fill(0));
 
   for (let i = 0; i < N; i++) {
     for (let k = 0; k < N; k++) {
       const aik = A[i][k];
-
-      if (aik === 0) {
-        continue;
-      }
+      if (aik === 0) continue;
 
       for (let j = 0; j < N; j++) {
-        result[i][j] = mod(
-          result[i][j] +
-          aik * B[k][j]
-        );
+        result[i][j] = mod(result[i][j] + aik * B[k][j]);
       }
     }
   }
@@ -89,140 +67,70 @@ function matMul(A, B) {
   return result;
 }
 
-function validateMatrix(matrix, name) {
-  if (!Array.isArray(matrix)) {
-    throw new Error(
-      `${name}: матрица отсутствует`
-    );
-  }
-
-  if (matrix.length !== N) {
-    throw new Error(
-      `${name}: неверный размер`
-    );
-  }
-
-  for (const row of matrix) {
-    if (
-      !Array.isArray(row) ||
-      row.length !== N
-    ) {
-      throw new Error(
-        `${name}: неверная структура`
-      );
-    }
-  }
-}
-
 function generateKeypair() {
   const A = uniformMatrix();
-
   const S = smallMatrix();
   const E = smallMatrix();
-
-  const B = matAdd(
-    matMul(A, S),
-    E
-  );
+  const B = matAdd(matMul(A, S), E);
 
   return {
-    publicKey: {
-      A,
-      B
-    },
+    publicKey: { A, B },
     privateKey: S
   };
 }
 
 function encapsulate(publicKey) {
   const { A, B } = publicKey;
+  const K = bitMatrix();
 
-  // Логические биты.
-  const K = Array.from({ length: N }, () =>
-    Array.from(
-      { length: N },
-      () => Math.floor(Math.random() * 2)
-    )
-  );
-
-  // В шифротексте бит 1 кодируем как Q/2.
+  // Encode 0 near 0 and 1 near Q/2.
+  // The previous version encoded 1 as literal +1, which made the
+  // decoder's ±Q/4 ranges overlap almost completely.
   const encodedK = K.map(row =>
-    row.map(bit => bit === 1 ? Math.floor(Q / 2) : 0)
+    row.map(bit => bit ? MESSAGE_ONE : 0)
   );
 
   const R1 = smallMatrix();
   const R2 = smallMatrix();
   const E1 = smallMatrix();
 
-  const U = matAdd(
-    matMul(R1, A),
-    E1
-  );
-
-  const V = matAdd(
-    matAdd(
-      matMul(R1, B),
-      R2
-    ),
-    encodedK
-  );
+  const U = matAdd(matMul(R1, A), E1);
+  const V = matAdd(matAdd(matMul(R1, B), R2), encodedK);
 
   return {
-    ciphertext: {
-      U,
-      V
-    },
-
-    // Именно исходный K используется отправителем
-    // для получения AES-ключа.
+    ciphertext: { U, V },
     K
   };
 }
 
 function decapsulate(privateKey, ciphertext) {
-  const { U, V } = ciphertext;
+  if (!privateKey || !ciphertext?.U || !ciphertext?.V) {
+    throw new Error('Некорректный NCR-LWE ciphertext');
+  }
 
-  const M = matSub(
-    V,
-    matMul(U, privateKey)
-  );
-
-  const K_rec = Array.from(
-    { length: N },
-    () => new Array(N).fill(0)
-  );
-
-  const HALF = Math.floor(Q / 2);
+  const M = matSub(ciphertext.V, matMul(ciphertext.U, privateKey));
+  const K = Array.from({ length: N }, () => new Array(N).fill(0));
 
   for (let i = 0; i < N; i++) {
     for (let j = 0; j < N; j++) {
-      const v = center(M[i][j]);
-
-      // Расстояние до точки 0.
-      const distanceToZero = Math.abs(v);
-
-      // Расстояние до Q/2 с учётом центрированного диапазона.
-      const distanceToOne = Math.abs(v - HALF);
-
-      K_rec[i][j] =
-        distanceToZero <= distanceToOne
-          ? 0
-          : 1;
+      const residue = mod(M[i][j]);
+      const distanceToZero = Math.min(residue, Q - residue);
+      const rawDistanceToOne = Math.abs(residue - MESSAGE_ONE);
+      const distanceToOne = Math.min(rawDistanceToOne, Q - rawDistanceToOne);
+      K[i][j] = distanceToOne < distanceToZero ? 1 : 0;
     }
   }
 
-  return K_rec;
+  return K;
 }
 
 function matrixToBytes(K) {
-  validateMatrix(K, 'K');
-
-  return Uint8Array.from(
-    K.flat().map(value => value & 1)
-  );
+  return Uint8Array.from(K.flat());
 }
 
 window.NCRLWE = {
+  N,
+  Q,
   generateKeypair,
   encapsulate,
   decapsulate,

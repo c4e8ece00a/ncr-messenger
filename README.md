@@ -1,37 +1,55 @@
-# NCR Messenger 3.0
+# NCR Messenger 3.1 — Security Hardening
 
-A small educational messenger for Vercel + Upstash Redis.
+This version is based on NCR Messenger 3.0 and adds Stage 1 security hardening.
 
-## Important
+## Added
 
-The NCR-LWE code in this project is an educational cryptographic prototype. It is **not** suitable for protecting real secrets or production communications. The application uses AES-GCM for the message body, while the NCR-LWE component is a custom demo KEM and has not been security-audited.
+- Argon2id password hashing.
+- Secure HttpOnly/Secure/SameSite session cookies.
+- Server-side session storage with hashed session tokens.
+- API authorization: sender/user identity comes from the session, not from request JSON/query parameters.
+- Rate limiting for login, public-key lookup, and sending.
+- Origin checks for state-changing requests.
+- Strict username and payload validation.
+- Security headers and HSTS.
+- No-store headers on API endpoints.
+- Real logout endpoint.
+- One-time migration path for legacy `sha256:<hash>` password records.
+- API polling no longer accepts a username and therefore cannot read another user's queue just by changing a query parameter.
 
-## Vercel setup
+## Environment variables
 
-1. Create/connect an Upstash Redis database through Vercel Marketplace.
-2. Make sure these environment variables exist in the Vercel project:
-   - `UPSTASH_REDIS_REST_URL`
-   - `UPSTASH_REDIS_REST_TOKEN`
-3. Push this repository to GitHub and import it into Vercel.
-4. Redeploy.
+Required:
 
-The code also accepts the old `KV_REST_API_URL` / `KV_REST_API_TOKEN` names as a compatibility fallback, but new deployments should use the Upstash names above.
+- `UPSTASH_REDIS_REST_URL`
+- `UPSTASH_REDIS_REST_TOKEN`
 
-## Local checks
+The legacy `KV_REST_API_URL` / `KV_REST_API_TOKEN` names are accepted only as compatibility fallback.
 
-```bash
-npm install
-npm test
-```
+## Important security limitation
 
-The tests verify 100 NCR-LWE key round trips and 100 NCR-LWE + AES-GCM end-to-end encrypt/decrypt cycles.
+The NCR-LWE component remains an educational cryptographic prototype and is NOT production-grade cryptography. Stage 1 hardens authentication and the API; it does not turn the custom NCR-LWE construction into audited cryptography.
 
-## Why the old project failed
+## Existing users
 
-- It used the deprecated `@vercel/kv` package. Vercel now recommends an external Redis integration and `@upstash/redis`.
-- `/api/messages` could be cached as `304`, even though it is a destructive queue-read endpoint.
-- The old service worker could cache application requests and make stale client code persist.
-- The old decoder encoded bit `1` as `+1`, while decoding with a `Q/4` window; the decision regions overlapped. The new demo encodes `1` near `Q/2` and uses circular distance modulo `Q`.
-- The old polling code could create multiple overlapping polling loops.
-- The old message queue used a non-atomic read followed by delete. The new endpoint uses Redis `MULTI/EXEC` so the queue read and delete execute atomically.
-- Encryption keys were stored under one global localStorage key. The new version stores a keypair per username.
+New passwords are stored with Argon2id.
+
+If an existing user record contains `sha256:<hash>`, a successful login upgrades it to Argon2id automatically.
+
+## Deploy
+
+1. Replace the current project files with this version.
+2. Install dependencies.
+3. Ensure the two Upstash environment variables exist in Vercel.
+4. Deploy.
+5. Test login, two-user messaging, logout, and expired-session behavior.
+
+## Important migration note
+
+Because this version intentionally changes the API contract:
+
+- `/api/messages` no longer accepts `?username=...`.
+- `/api/send` no longer accepts `sender`.
+- The browser sends credentials by same-origin cookie.
+
+Do not keep an older cached `app.js` open while testing. The service worker cache name is bumped to `ncr-messenger-v3-1`.

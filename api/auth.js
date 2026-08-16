@@ -1,32 +1,25 @@
-import crypto from 'node:crypto';
+import { hash, verify } from '@node-rs/argon2';
 import { getRedis } from '../lib/redis.js';
+import {
+  MAX_PASSWORD_LENGTH, normalizeUsername, validUsername, newToken, sha256,
+  setSessionCookie, noStore, requireSameOrigin, rateLimit, jsonBodySize
+} from '../lib/security.js';
+import { securityHeaders } from '../lib/security.js';
 
-function normalizeUsername(value) {
-  return String(value ?? '').trim();
-}
+const SESSION_TTL = 60 * 60 * 24 * 30;
+const MIN_PASSWORD_LENGTH = 8;
 
-function hashPassword(password, saltHex) {
-  const salt = saltHex ? Buffer.from(saltHex, 'hex') : crypto.randomBytes(16);
-  const derived = crypto.scryptSync(String(password), salt, 64);
-  return {
-    salt: salt.toString('hex'),
-    hash: derived.toString('hex')
-  };
-}
-
-function verifyPassword(password, stored) {
-  if (!stored?.salt || !stored?.hash) return false;
-  const derived = crypto.scryptSync(String(password), Buffer.from(stored.salt, 'hex'), 64);
-  const expected = Buffer.from(stored.hash, 'hex');
-  return expected.length === derived.length && crypto.timingSafeEqual(expected, derived);
+function genericAuthError(res) {
+  return res.status(401).json({ error: 'Неверные учетные данные' });
 }
 
 export default async function handler(req, res) {
-  res.setHeader('Cache-Control', 'no-store');
+  securityHeaders(res);
+  noStore(res);
 
-  if (req.method !== 'POST') {
-    return res.status(405).json({ error: 'Method not allowed' });
-  }
+  if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' });
+  if (!requireSameOrigin(req, res)) return;
+  if (jsonBodySize(req) > 16 * 1024) return res.status(413).json({ error: 'Слишком большой запрос' });
 
   try {
     const body = req.body || {};
@@ -34,57 +27,78 @@ export default async function handler(req, res) {
     const password = String(body.password ?? '');
     const publicKey = body.publicKey;
 
-    if (!/^[A-Za-z0-9_.-]{2,32}$/.test(username)) {
-      return res.status(400).json({
-        error: 'Имя должно содержать 2–32 символа: латинские буквы, цифры, _, -, .'
-      });
-    }
-
-    if (password.length < 4 || password.length > 128) {
-      return res.status(400).json({ error: 'Пароль должен содержать 4–128 символов' });
-    }
-
-    if (!publicKey || typeof publicKey !== 'object') {
-      return res.status(400).json({ error: 'publicKey is required' });
+    if (!validUsername(username) || password.length < MIN_PASSWORD_LENGTH || password.length > MAX_PASSWORD_LENGTH) {
+      return genericAuthError(res);
     }
 
     const redis = getRedis();
+    const rl = await rateLimit(redis, `login:${username}:${req.headers['x-forwarded-for'] || 'unknown'}`, 5, 300);
+    if (!rl.allowed) return res.status(429).json({ error: 'Слишком много попыток. Попробуйте позже.' });
+
     const userKey = `user:${username}`;
-    const publicKeyKey = `publicKey:${username}`;
     const existing = await redis.get(userKey);
 
-    if (existing) {
-      if (!verifyPassword(password, existing)) {
-        return res.status(401).json({ error: 'Неверное имя или пароль' });
+    if (!existing) {
+      if (!publicKey || typeof publicKey !== 'object') {
+        return res.status(400).json({ error: 'Для нового аккаунта требуется publicKey' });
+      }
+      const passwordHash = await hash(password, {
+        algorithm: 'argon2id',
+        memoryCost: 19456,
+        timeCost: 2,
+        parallelism: 1
+      });
+
+      await redis.set(userKey, JSON.stringify({
+        username,
+        passwordHash,
+        createdAt: Date.now()
+      }));
+      await redis.set(`publicKey:${username}`, publicKey);
+    } else {
+      const user = typeof existing === 'string' ? JSON.parse(existing) : existing;
+      let valid = false;
+
+      if (user?.passwordHash) {
+        valid = await verify(user.passwordHash, password);
       }
 
-      // The account is device-key based: the current browser's key becomes
-      // the active public key after a successful login.
-      await redis.set(userKey, {
-        ...existing,
-        publicKey,
-        updatedAt: Date.now()
-      });
-      await redis.set(publicKeyKey, publicKey);
+      // One-time compatibility migration from the old SHA-256 password format.
+      if (!valid && user?.passwordHash?.startsWith('sha256:')) {
+        const legacy = sha256(password);
+        if (legacy === user.passwordHash.slice(7)) {
+          const upgraded = await hash(password, {
+            algorithm: 'argon2id',
+            memoryCost: 19456,
+            timeCost: 2,
+            parallelism: 1
+          });
+          user.passwordHash = upgraded;
+          await redis.set(userKey, JSON.stringify(user));
+          valid = true;
+        }
+      }
 
-      return res.status(200).json({ status: 'logged_in' });
+      if (!valid) return genericAuthError(res);
+
+      // Do not silently replace the recipient's identity key on login.
+      if (publicKey) {
+        const storedKey = await redis.get(`publicKey:${username}`);
+        if (!storedKey) await redis.set(`publicKey:${username}`, publicKey);
+      }
     }
 
-    const passwordData = hashPassword(password);
-    const user = {
-      passwordHash: passwordData.hash,
-      passwordSalt: passwordData.salt,
-      publicKey,
-      createdAt: Date.now(),
-      updatedAt: Date.now()
-    };
+    const token = newToken(32);
+    await redis.set(
+      `session:${sha256(token)}`,
+      JSON.stringify({ username, createdAt: Date.now() }),
+      { ex: SESSION_TTL }
+    );
+    setSessionCookie(res, token, SESSION_TTL);
 
-    await redis.set(userKey, user);
-    await redis.set(publicKeyKey, publicKey);
-
-    return res.status(200).json({ status: 'registered' });
+    return res.status(200).json({ status: 'ok', username });
   } catch (error) {
-    console.error('POST /api/auth:', error);
-    return res.status(500).json({ error: error?.message || 'Ошибка авторизации' });
+    console.error('POST /api/auth:', error?.message || error);
+    return res.status(500).json({ error: 'Ошибка авторизации' });
   }
 }

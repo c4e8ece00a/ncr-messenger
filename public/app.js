@@ -44,10 +44,7 @@ async function encryptMessage(aesKey, plaintext) {
   const nonce = crypto.getRandomValues(new Uint8Array(12));
   const encoded = new TextEncoder().encode(plaintext);
   const ciphertext = await crypto.subtle.encrypt({ name: 'AES-GCM', iv: nonce }, aesKey, encoded);
-  return {
-    nonce: Array.from(nonce),
-    ciphertext: Array.from(new Uint8Array(ciphertext))
-  };
+  return { nonce: Array.from(nonce), ciphertext: Array.from(new Uint8Array(ciphertext)) };
 }
 
 async function decryptMessage(aesKey, nonce, ciphertext) {
@@ -71,6 +68,7 @@ async function apiAuth(name, password, key) {
   const res = await fetch('/api/auth', {
     method: 'POST',
     cache: 'no-store',
+    credentials: 'same-origin',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ username: name, password, publicKey: key })
   });
@@ -78,25 +76,37 @@ async function apiAuth(name, password, key) {
 }
 
 async function apiGetPublicKey(name) {
-  const url = `/api/publicKey?username=${encodeURIComponent(name)}&_=${Date.now()}`;
-  const res = await fetch(url, { method: 'GET', cache: 'no-store' });
-  const data = await readJsonResponse(res);
-  return data.publicKey;
+  const url = `/api/publicKey?username=${encodeURIComponent(name)}`;
+  const res = await fetch(url, { method: 'GET', cache: 'no-store', credentials: 'same-origin' });
+  return (await readJsonResponse(res)).publicKey;
 }
 
 async function apiSend(recipient, payload) {
   const res = await fetch('/api/send', {
     method: 'POST',
     cache: 'no-store',
+    credentials: 'same-origin',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ sender: username, recipient, payload })
+    body: JSON.stringify({ recipient, payload })
   });
   return readJsonResponse(res);
 }
 
-async function apiGetMessages(name) {
-  const url = `/api/messages?username=${encodeURIComponent(name)}&_=${Date.now()}`;
-  const res = await fetch(url, { method: 'GET', cache: 'no-store' });
+async function apiGetMessages() {
+  const res = await fetch('/api/messages', {
+    method: 'GET',
+    cache: 'no-store',
+    credentials: 'same-origin'
+  });
+  return readJsonResponse(res);
+}
+
+async function apiLogout() {
+  const res = await fetch('/api/logout', {
+    method: 'POST',
+    cache: 'no-store',
+    credentials: 'same-origin'
+  });
   return readJsonResponse(res);
 }
 
@@ -175,22 +185,20 @@ async function checkMessages() {
 
   pollingInProgress = true;
   try {
-    const data = await apiGetMessages(username);
+    const data = await apiGetMessages();
     const messages = Array.isArray(data.messages) ? data.messages : [];
 
     let failed = 0;
     for (const payload of messages) {
       try {
         await processIncomingMessage(payload);
-      } catch (error) {
+      } catch {
         failed++;
-        console.error('Decryption error:', error, payload);
       }
     }
 
     setStatus(failed ? `Не удалось расшифровать: ${failed}` : 'Подключено', failed > 0);
   } catch (error) {
-    console.error('Polling error:', error);
     setStatus(`Ошибка связи: ${error.message}`, true);
   } finally {
     pollingInProgress = false;
@@ -217,21 +225,18 @@ async function sendMessage() {
     const aesKey = await deriveAesKey(K);
     const encrypted = await encryptMessage(aesKey, message);
 
-    const payload = {
+    await apiSend(recipient, {
       U: ciphertext.U,
       V: ciphertext.V,
       nonce: encrypted.nonce,
       ciphertext: encrypted.ciphertext
-    };
-
-    await apiSend(recipient, payload);
+    });
 
     addMessage(message, { outgoing: true, timestamp: Date.now() });
     $('message-input').value = '';
     autoGrowTextarea();
     setStatus(`Отправлено пользователю ${recipient}`);
   } catch (error) {
-    console.error('Send error:', error);
     setStatus(`Ошибка отправки: ${error.message}`, true);
   } finally {
     $('send-btn').disabled = false;
@@ -268,7 +273,6 @@ $('login-form').addEventListener('submit', async (event) => {
     showChat(name);
     await checkMessages();
   } catch (error) {
-    console.error('Login error:', error);
     $('login-error').textContent = error.message;
   } finally {
     authInProgress = false;
@@ -277,12 +281,15 @@ $('login-form').addEventListener('submit', async (event) => {
   }
 });
 
-$('logout-btn').addEventListener('click', () => {
+$('logout-btn').addEventListener('click', async () => {
   username = null;
   clearTimeout(pollingTimer);
   pollingTimer = null;
+  pollingInProgress = false;
   privateKey = null;
   publicKey = null;
+
+  try { await apiLogout(); } catch {}
   $('messages').innerHTML = `
     <div id="empty-state" class="empty-state">
       <div class="empty-icon">✉</div>
@@ -306,10 +313,9 @@ $('message-input').addEventListener('keydown', (event) => {
   }
 });
 
-// Restore the last username in the form, but never auto-login without a password.
 const lastUsername = localStorage.getItem('ncrlwe_last_username');
 if (lastUsername) $('username-input').value = lastUsername;
 
 if ('serviceWorker' in navigator) {
-  navigator.serviceWorker.register('/sw.js').catch((error) => console.warn('SW:', error));
+  navigator.serviceWorker.register('/sw.js').catch(() => {});
 }

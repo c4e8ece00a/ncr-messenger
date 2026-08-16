@@ -18,15 +18,12 @@
         <div class="logo">N</div>
         <h1>NCR Messenger</h1>
         <p class="muted">Простой зашифрованный чат</p>
-
         <form id="login-form" autocomplete="on">
-          <label>
-            <span>Имя пользователя</span>
+          <label><span>Имя пользователя</span>
             <input id="username-input" name="username" type="text" inputmode="text" autocomplete="username" autocapitalize="none" spellcheck="false" maxlength="32" placeholder="например, Kate1" required>
           </label>
-          <label>
-            <span>Пароль</span>
-            <input id="password-input" name="password" type="password" autocomplete="current-password" minlength="4" maxlength="128" placeholder="Минимум 4 символа" required>
+          <label><span>Пароль</span>
+            <input id="password-input" name="password" type="password" autocomplete="current-password" minlength="8" maxlength="128" placeholder="Минимум 8 символов" required>
           </label>
           <button id="login-btn" class="primary full" type="submit">Войти / создать аккаунт</button>
         </form>
@@ -34,19 +31,14 @@
         <p class="hint">Ключ шифрования хранится в этом браузере. Не очищайте данные сайта, если хотите сохранить доступ к старым сообщениям.</p>
       </div>
     </section>
-
     <section id="chat-screen" class="screen chat-screen hidden">
       <header class="chat-header">
         <div class="identity">
           <div class="avatar" id="user-avatar">N</div>
-          <div>
-            <strong>NCR Messenger</strong>
-            <div class="online"><span></span><span id="current-user"></span></div>
-          </div>
+          <div><strong>NCR Messenger</strong><div class="online"><span></span><span id="current-user"></span></div></div>
         </div>
         <button id="logout-btn" class="icon-button" type="button" aria-label="Выйти">Выйти</button>
       </header>
-
       <main id="messages" class="messages" aria-live="polite">
         <div id="empty-state" class="empty-state">
           <div class="empty-icon">✉</div>
@@ -54,9 +46,7 @@
           <p>Введите имя получателя ниже и отправьте первое сообщение.</p>
         </div>
       </main>
-
       <div id="status-bar" class="status-bar" aria-live="polite"></div>
-
       <form id="composer" class="composer">
         <div class="recipient-row">
           <label for="recipient-input">Получатель</label>
@@ -69,7 +59,6 @@
       </form>
     </section>
   </div>
-
   <script src="/ncr-lwe.js"></script>
   <script src="/app.js"></script>
 </body>

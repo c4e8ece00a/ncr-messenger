@@ -1,29 +1,29 @@
 import { getRedis } from '../lib/redis.js';
+import { normalizeUsername, validUsername, requireSession, noStore, securityHeaders, rateLimit } from '../lib/security.js';
 
 export default async function handler(req, res) {
-  res.setHeader('Cache-Control', 'no-store');
+  securityHeaders(res);
+  noStore(res);
 
-  if (req.method !== 'GET') {
-    return res.status(405).json({ error: 'Method not allowed' });
-  }
-
-  const username = String(req.query?.username ?? '').trim();
-
-  if (!username) {
-    return res.status(400).json({ error: 'username query parameter required' });
-  }
+  if (req.method !== 'GET') return res.status(405).json({ error: 'Method not allowed' });
 
   try {
     const redis = getRedis();
-    const publicKey = await redis.get(`publicKey:${username}`);
+    const session = await requireSession(req, res, redis);
+    if (!session) return;
 
-    if (!publicKey) {
-      return res.status(404).json({ error: 'Пользователь не найден' });
-    }
+    const username = normalizeUsername(req.query?.username);
+    if (!validUsername(username)) return res.status(400).json({ error: 'Некорректное имя пользователя' });
+
+    const rl = await rateLimit(redis, `pubkey:${session.username}`, 60, 60);
+    if (!rl.allowed) return res.status(429).json({ error: 'Слишком много запросов' });
+
+    const publicKey = await redis.get(`publicKey:${username}`);
+    if (!publicKey) return res.status(404).json({ error: 'Пользователь не найден' });
 
     return res.status(200).json({ publicKey });
   } catch (error) {
-    console.error('GET /api/publicKey:', error);
-    return res.status(500).json({ error: error?.message || 'Ошибка базы данных' });
+    console.error('GET /api/publicKey:', error?.message || error);
+    return res.status(500).json({ error: 'Ошибка базы данных' });
   }
 }

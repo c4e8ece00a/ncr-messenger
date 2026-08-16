@@ -1,15 +1,14 @@
 {
   "name": "ncr-messenger",
-  "version": "3.0.0",
+  "version": "3.1.0",
   "private": true,
   "type": "module",
-  "engines": {
-    "node": ">=20"
-  },
+  "engines": { "node": ">=20" },
   "dependencies": {
+    "@node-rs/argon2": "^2.0.2",
     "@upstash/redis": "^1.38.0"
   },
   "scripts": {
-    "test": "node tests/test-ncr-lwe.cjs && node tests/test-e2e.cjs"
+    "test": "node tests/test-security.cjs && node tests/test-ncr-lwe.cjs && node tests/test-e2e.cjs"
   }
 }

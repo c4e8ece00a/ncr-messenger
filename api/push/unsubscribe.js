@@ -1,20 +1,13 @@
+import crypto from 'node:crypto';
+
 import { getRedis } from '../../lib/redis.js';
 
 import {
-  noStore,
   securityHeaders,
+  noStore,
   requireSession,
-  requireSameOrigin,
-  jsonBodySize,
-  rateLimit
+  requireSameOrigin
 } from '../../lib/security.js';
-
-import {
-  validateSubscription,
-  subscriptionId
-} from '../../lib/push.js';
-
-const MAX_BODY_SIZE = 16 * 1024;
 
 export default async function handler(req, res) {
   securityHeaders(res);
@@ -30,51 +23,37 @@ export default async function handler(req, res) {
     return;
   }
 
-  if (jsonBodySize(req) > MAX_BODY_SIZE) {
-    return res.status(413).json({
-      error: 'Слишком большой запрос'
-    });
-  }
-
   try {
     const redis = getRedis();
 
-    const session = await requireSession(req, res, redis);
+    const session =
+      await requireSession(
+        req,
+        res,
+        redis
+      );
 
-    if (!session) {
-      return;
-    }
+    if (!session) return;
 
-    const rl = await rateLimit(
-      redis,
-      `push-unsubscribe:${session.username}`,
-      10,
-      300
-    );
+    const endpoint =
+      String(
+        req.body?.endpoint || ''
+      );
 
-    if (!rl.allowed) {
-      return res.status(429).json({
-        error: 'Слишком много запросов'
-      });
-    }
-
-    const subscription = req.body?.subscription;
-
-    if (!validateSubscription(subscription)) {
+    if (!endpoint) {
       return res.status(400).json({
-        error: 'Некорректная Push-подписка'
+        error: 'endpoint required'
       });
     }
 
-    const id = subscriptionId(subscription);
+    const hash =
+      crypto
+        .createHash('sha256')
+        .update(endpoint)
+        .digest('hex');
 
     await redis.del(
-      `pushSub:${session.username}:${id}`
-    );
-
-    await redis.srem(
-      `pushSubs:${session.username}`,
-      id
+      `push:${session.username}:${hash}`
     );
 
     return res.status(200).json({

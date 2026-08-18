@@ -3,21 +3,78 @@ import crypto from 'node:crypto';
 import { getRedis } from '../lib/redis.js';
 
 import {
-  MAX_MESSAGE_BYTES,
   noStore,
   securityHeaders,
   requireSession,
   requireSameOrigin,
   jsonBodySize,
-  normalizeUsername,
-  validUsername,
   rateLimit,
-  isValidCiphertext,
-  isValidByteArray
+  normalizeUsername,
+  validUsername
 } from '../lib/security.js';
 
-const MAX_CIPHERTEXT_BYTES = 32768;
-const MAX_PAYLOAD_JSON_BYTES = 65536;
+import {
+  sendPush
+} from '../lib/push.js';
+
+const MAX_BODY_SIZE = 128 * 1024;
+
+const MAX_MATRIX_SIZE = 8;
+
+function isValidMatrix(matrix) {
+  if (!Array.isArray(matrix)) {
+    return false;
+  }
+
+  if (matrix.length !== MAX_MATRIX_SIZE) {
+    return false;
+  }
+
+  return matrix.every(
+    row =>
+      Array.isArray(row) &&
+      row.length === MAX_MATRIX_SIZE &&
+      row.every(value => Number.isInteger(value))
+  );
+}
+
+function validByteArray(value, maxLength) {
+  return (
+    Array.isArray(value) &&
+    value.length > 0 &&
+    value.length <= maxLength &&
+    value.every(
+      value =>
+        Number.isInteger(value) &&
+        value >= 0 &&
+        value <= 255
+    )
+  );
+}
+
+function validatePayload(payload) {
+  if (!payload || typeof payload !== 'object') {
+    return false;
+  }
+
+  if (!isValidMatrix(payload.U)) {
+    return false;
+  }
+
+  if (!isValidMatrix(payload.V)) {
+    return false;
+  }
+
+  if (!validByteArray(payload.nonce, 32)) {
+    return false;
+  }
+
+  if (!validByteArray(payload.ciphertext, 128 * 1024)) {
+    return false;
+  }
+
+  return true;
+}
 
 export default async function handler(req, res) {
   securityHeaders(res);
@@ -33,11 +90,7 @@ export default async function handler(req, res) {
     return;
   }
 
-  const bodySize = jsonBodySize(req);
-
-  if (
-    bodySize > MAX_PAYLOAD_JSON_BYTES
-  ) {
+  if (jsonBodySize(req) > MAX_BODY_SIZE) {
     return res.status(413).json({
       error: 'Слишком большой запрос'
     });
@@ -46,103 +99,16 @@ export default async function handler(req, res) {
   try {
     const redis = getRedis();
 
-    const session = await requireSession(
-      req,
-      res,
-      redis
-    );
+    const session = await requireSession(req, res, redis);
 
     if (!session) {
       return;
     }
 
-    const sender = normalizeUsername(
-      session.username
-    );
-
-    const body = req.body || {};
-
-    const recipient = normalizeUsername(
-      body.recipient
-    );
-
-    const payload = body.payload;
-
-    if (!validUsername(sender)) {
-      return res.status(401).json({
-        error: 'Недействительная сессия'
-      });
-    }
-
-    if (!validUsername(recipient)) {
-      return res.status(400).json({
-        error: 'Некорректное имя получателя'
-      });
-    }
-
-    if (sender === recipient) {
-      return res.status(400).json({
-        error: 'Нельзя отправить сообщение самому себе'
-      });
-    }
-
-    if (
-      !payload ||
-      typeof payload !== 'object' ||
-      Array.isArray(payload)
-    ) {
-      return res.status(400).json({
-        error: 'Некорректный зашифрованный пакет'
-      });
-    }
-
-    if (
-      !isValidCiphertext({
-        U: payload.U,
-        V: payload.V
-      })
-    ) {
-      return res.status(400).json({
-        error: 'Некорректный NCR-LWE ciphertext'
-      });
-    }
-
-    if (
-      !isValidByteArray(payload.nonce, 12)
-    ) {
-      return res.status(400).json({
-        error: 'Некорректный nonce'
-      });
-    }
-
-    if (
-      !isValidByteArray(payload.ciphertext) ||
-      payload.ciphertext.length < 16 ||
-      payload.ciphertext.length > MAX_CIPHERTEXT_BYTES
-    ) {
-      return res.status(400).json({
-        error: 'Некорректный ciphertext'
-      });
-    }
-
-    const serializedPayload =
-      JSON.stringify(payload);
-
-    if (
-      Buffer.byteLength(
-        serializedPayload,
-        'utf8'
-      ) > MAX_MESSAGE_BYTES
-    ) {
-      return res.status(413).json({
-        error: 'Сообщение слишком большое'
-      });
-    }
-
     const rl = await rateLimit(
       redis,
-      `send:${sender}`,
-      30,
+      `send:${session.username}`,
+      60,
       60
     );
 
@@ -151,6 +117,25 @@ export default async function handler(req, res) {
         error: 'Слишком много сообщений. Попробуйте позже.'
       });
     }
+
+    const body = req.body || {};
+
+    const recipient = normalizeUsername(body.recipient);
+    const payload = body.payload;
+
+    if (!validUsername(recipient)) {
+      return res.status(400).json({
+        error: 'Некорректный получатель'
+      });
+    }
+
+    if (!validatePayload(payload)) {
+      return res.status(400).json({
+        error: 'Некорректный зашифрованный пакет'
+      });
+    }
+
+    const sender = session.username;
 
     const recipientExists = await redis.exists(
       `user:${recipient}`
@@ -173,14 +158,109 @@ export default async function handler(req, res) {
       ciphertext: payload.ciphertext
     };
 
+    /*
+     * Сначала сохраняем сообщение.
+     *
+     * Даже если Push-сервис временно недоступен,
+     * само сообщение не потеряется.
+     */
     await redis.rpush(
       `messages:${recipient}`,
       JSON.stringify(message)
     );
 
+    /*
+     * Получаем Push-подписки получателя.
+     */
+    let pushIds = [];
+
+    try {
+      pushIds = await redis.smembers(
+        `pushSubs:${recipient}`
+      );
+    } catch (pushListError) {
+      console.error(
+        'Unable to read push subscriptions:',
+        pushListError
+      );
+    }
+
+    let pushSent = 0;
+
+    for (const id of pushIds || []) {
+      const subscriptionRaw = await redis.get(
+        `pushSub:${recipient}:${id}`
+      );
+
+      if (!subscriptionRaw) {
+        await redis.srem(
+          `pushSubs:${recipient}`,
+          id
+        );
+
+        continue;
+      }
+
+      let subscription;
+
+      try {
+        subscription =
+          typeof subscriptionRaw === 'string'
+            ? JSON.parse(subscriptionRaw)
+            : subscriptionRaw;
+      } catch {
+        await redis.del(
+          `pushSub:${recipient}:${id}`
+        );
+
+        await redis.srem(
+          `pushSubs:${recipient}`,
+          id
+        );
+
+        continue;
+      }
+
+      try {
+        /*
+         * В Push никогда не отправляем текст сообщения.
+         */
+        await sendPush(subscription, {
+          type: 'new-message',
+          sender,
+          messageId: message.id
+        });
+
+        pushSent++;
+      } catch (pushError) {
+        const statusCode = pushError?.statusCode;
+
+        console.error(
+          `Push failed for ${recipient}/${id}:`,
+          statusCode || pushError?.message || pushError
+        );
+
+        /*
+         * 404 / 410 обычно означают,
+         * что подписка больше не существует.
+         */
+        if (statusCode === 404 || statusCode === 410) {
+          await redis.del(
+            `pushSub:${recipient}:${id}`
+          );
+
+          await redis.srem(
+            `pushSubs:${recipient}`,
+            id
+          );
+        }
+      }
+    }
+
     return res.status(200).json({
       status: 'sent',
-      id: message.id
+      id: message.id,
+      pushSent
     });
   } catch (error) {
     console.error(

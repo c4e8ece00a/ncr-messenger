@@ -1,20 +1,14 @@
+import crypto from 'node:crypto';
+
 import { getRedis } from '../../lib/redis.js';
 
 import {
-  noStore,
   securityHeaders,
+  noStore,
   requireSession,
   requireSameOrigin,
-  jsonBodySize,
-  rateLimit
+  jsonBodySize
 } from '../../lib/security.js';
-
-import {
-  validateSubscription,
-  subscriptionId
-} from '../../lib/push.js';
-
-const MAX_BODY_SIZE = 16 * 1024;
 
 export default async function handler(req, res) {
   securityHeaders(res);
@@ -30,7 +24,7 @@ export default async function handler(req, res) {
     return;
   }
 
-if (jsonBodySize(req) > MAX_BODY_SIZE) {
+  if (jsonBodySize(req) > 32 * 1024) {
     return res.status(413).json({
       error: 'Слишком большой запрос'
     });
@@ -39,53 +33,54 @@ if (jsonBodySize(req) > MAX_BODY_SIZE) {
   try {
     const redis = getRedis();
 
-    const session = await requireSession(req, res, redis);
+    const session =
+      await requireSession(
+        req,
+        res,
+        redis
+      );
 
-    if (!session) {
-      return;
-    }
+    if (!session) return;
 
-    const rl = await rateLimit(
-      redis,
-      `push-subscribe:${session.username}`,
-      10,
-      300
-    );
+    const subscription =
+      req.body?.subscription;
 
-    if (!rl.allowed) {
-      return res.status(429).json({
-        error: 'Слишком много запросов'
-      });
-    }
-
-    const subscription = req.body?.subscription;
-
-    if (!validateSubscription(subscription)) {
+    if (
+      !subscription ||
+      typeof subscription !== 'object' ||
+      typeof subscription.endpoint !== 'string' ||
+      !subscription.keys ||
+      typeof subscription.keys.p256dh !== 'string' ||
+      typeof subscription.keys.auth !== 'string'
+    ) {
       return res.status(400).json({
-        error: 'Некорректная Push-подписка'
+        error: 'Некорректная push-подписка'
       });
     }
 
-    const id = subscriptionId(subscription);
+    const hash =
+      crypto
+        .createHash('sha256')
+        .update(subscription.endpoint)
+        .digest('hex');
 
-    const key = `pushSub:${session.username}:${id}`;
+    const key =
+      `push:${session.username}:${hash}`;
 
     await redis.set(
       key,
       JSON.stringify({
         endpoint: subscription.endpoint,
+        expirationTime:
+          subscription.expirationTime ?? null,
         keys: {
-          p256dh: subscription.keys.p256dh,
-          auth: subscription.keys.auth
+          p256dh:
+            subscription.keys.p256dh,
+          auth:
+            subscription.keys.auth
         },
-        createdAt: Date.now(),
-        updatedAt: Date.now()
+        createdAt: Date.now()
       })
-    );
-
-    await redis.sadd(
-      `pushSubs:${session.username}`,
-      id
     );
 
     return res.status(200).json({
@@ -102,5 +97,3 @@ if (jsonBodySize(req) > MAX_BODY_SIZE) {
     });
   }
 }
-
-

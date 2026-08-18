@@ -4,7 +4,6 @@ import {
   noStore,
   securityHeaders,
   requireSession,
-  requireSameOrigin,
   normalizeUsername,
   validUsername
 } from '../lib/security.js';
@@ -19,20 +18,6 @@ export default async function handler(req, res) {
     });
   }
 
-  if (!requireSameOrigin(req, res)) {
-    return;
-  }
-
-  const username = normalizeUsername(
-    req.query?.username
-  );
-
-  if (!validUsername(username)) {
-    return res.status(400).json({
-      error: 'Некорректное имя пользователя'
-    });
-  }
-
   try {
     const redis = getRedis();
 
@@ -44,6 +29,16 @@ export default async function handler(req, res) {
 
     if (!session) {
       return;
+    }
+
+    const username = normalizeUsername(
+      req.query?.username
+    );
+
+    if (!validUsername(username)) {
+      return res.status(400).json({
+        error: 'Некорректное имя пользователя'
+      });
     }
 
     const publicKey = await redis.get(
@@ -66,7 +61,7 @@ export default async function handler(req, res) {
     );
 
     return res.status(500).json({
-      error: 'Ошибка получения публичного ключа'
+      error: 'Ошибка базы данных'
     });
   }
 }

@@ -5,47 +5,60 @@ let publicKey = null;
 let pollingTimer = null;
 let pollingInProgress = false;
 let authInProgress = false;
-let pushSubscription = null;
 
-const POLL_INTERVAL = 2500;
+const renderedMessageIds =
+  new Set();
 
-const $ = (id) => document.getElementById(id);
+const $ = (id) =>
+  document.getElementById(id);
+
 
 function keyStorageName(name) {
   return `ncrlwe_keys:${name}`;
 }
 
-/*
- * =========================
- * KEYS
- * =========================
- */
 
 function loadOrGenerateKeys(name) {
-  const storageKey = keyStorageName(name);
-  const stored = localStorage.getItem(storageKey);
+  const storageKey =
+    keyStorageName(name);
+
+  const stored =
+    localStorage.getItem(
+      storageKey
+    );
 
   if (stored) {
     try {
-      const parsed = JSON.parse(stored);
+      const parsed =
+        JSON.parse(stored);
 
       if (
         parsed?.privateKey &&
         parsed?.publicKey
       ) {
-        privateKey = parsed.privateKey;
-        publicKey = parsed.publicKey;
+        privateKey =
+          parsed.privateKey;
+
+        publicKey =
+          parsed.publicKey;
+
         return;
       }
     } catch {
-      localStorage.removeItem(storageKey);
+      localStorage.removeItem(
+        storageKey
+      );
     }
   }
 
-  const keys = NCRLWE.generateKeypair();
+  const keys =
+    NCRLWE.generateKeypair();
 
-  privateKey = keys.privateKey;
-  publicKey = keys.publicKey;
+  privateKey =
+    keys.privateKey;
+
+  publicKey =
+    keys.publicKey;
 
   localStorage.setItem(
     storageKey,
@@ -56,14 +69,10 @@ function loadOrGenerateKeys(name) {
   );
 }
 
-/*
- * =========================
- * AES
- * =========================
- */
 
 async function deriveAesKey(K) {
-  const bytes = NCRLWE.matrixToBytes(K);
+  const bytes =
+    NCRLWE.matrixToBytes(K);
 
   const hash =
     await crypto.subtle.digest(
@@ -78,9 +87,13 @@ async function deriveAesKey(K) {
       name: 'AES-GCM'
     },
     false,
-    ['encrypt', 'decrypt']
+    [
+      'encrypt',
+      'decrypt'
+    ]
   );
 }
+
 
 async function encryptMessage(
   aesKey,
@@ -107,12 +120,16 @@ async function encryptMessage(
     );
 
   return {
-    nonce: Array.from(nonce),
-    ciphertext: Array.from(
-      new Uint8Array(ciphertext)
-    )
+    nonce:
+      Array.from(nonce),
+
+    ciphertext:
+      Array.from(
+        new Uint8Array(ciphertext)
+      )
   };
 }
+
 
 async function decryptMessage(
   aesKey,
@@ -123,32 +140,29 @@ async function decryptMessage(
     await crypto.subtle.decrypt(
       {
         name: 'AES-GCM',
-        iv: new Uint8Array(nonce)
+        iv:
+          new Uint8Array(nonce)
       },
       aesKey,
       new Uint8Array(ciphertext)
     );
 
-  return new TextDecoder().decode(
-    decoded
-  );
+  return new TextDecoder()
+    .decode(decoded);
 }
 
-/*
- * =========================
- * API
- * =========================
- */
 
 async function readJsonResponse(res) {
-  const text = await res.text();
+  const text =
+    await res.text();
 
   let data = {};
 
   try {
-    data = text
-      ? JSON.parse(text)
-      : {};
+    data =
+      text
+        ? JSON.parse(text)
+        : {};
   } catch {}
 
   if (!res.ok) {
@@ -161,17 +175,16 @@ async function readJsonResponse(res) {
   return data;
 }
 
+
 async function apiAuth(
   name,
   password,
   key
 ) {
-  const res = await fetch(
-    '/api/auth',
-    {
+  const res =
+    await fetch('/api/auth', {
       method: 'POST',
       cache: 'no-store',
-      credentials: 'same-origin',
       headers: {
         'Content-Type':
           'application/json'
@@ -181,24 +194,21 @@ async function apiAuth(
         password,
         publicKey: key
       })
-    }
-  );
+    });
 
   return readJsonResponse(res);
 }
+
 
 async function apiGetPublicKey(name) {
   const url =
     `/api/publicKey?username=${encodeURIComponent(name)}&_=${Date.now()}`;
 
-  const res = await fetch(
-    url,
-    {
+  const res =
+    await fetch(url, {
       method: 'GET',
-      cache: 'no-store',
-      credentials: 'same-origin'
-    }
-  );
+      cache: 'no-store'
+    });
 
   const data =
     await readJsonResponse(res);
@@ -206,16 +216,15 @@ async function apiGetPublicKey(name) {
   return data.publicKey;
 }
 
+
 async function apiSend(
   recipient,
   payload
 ) {
-  const res = await fetch(
-    '/api/send',
-    {
+  const res =
+    await fetch('/api/send', {
       method: 'POST',
       cache: 'no-store',
-      credentials: 'same-origin',
       headers: {
         'Content-Type':
           'application/json'
@@ -224,73 +233,85 @@ async function apiSend(
         recipient,
         payload
       })
-    }
-  );
+    });
 
   return readJsonResponse(res);
 }
+
 
 async function apiGetMessages() {
   const url =
-    `/api/messages?_=${Date.now()}`;
+    `/api/messages?username=${encodeURIComponent(username)}&_=${Date.now()}`;
 
-  const res = await fetch(
-    url,
-    {
+  const res =
+    await fetch(url, {
       method: 'GET',
-      cache: 'no-store',
-      credentials: 'same-origin'
-    }
-  );
+      cache: 'no-store'
+    });
 
   return readJsonResponse(res);
 }
 
-async function apiPushSubscribe(subscription) {
-  const res = await fetch(
-    '/api/push/subscribe',
-    {
-      method: 'POST',
-      cache: 'no-store',
-      credentials: 'same-origin',
-      headers: {
-        'Content-Type':
-          'application/json'
-      },
-      body: JSON.stringify({
-        subscription
-      })
-    }
-  );
+
+async function apiGetPushConfig() {
+  const res =
+    await fetch(
+      '/api/push/config',
+      {
+        method: 'GET',
+        cache: 'no-store'
+      }
+    );
 
   return readJsonResponse(res);
 }
 
-async function apiPushUnsubscribe(subscription) {
-  const res = await fetch(
-    '/api/push/unsubscribe',
-    {
-      method: 'POST',
-      cache: 'no-store',
-      credentials: 'same-origin',
-      headers: {
-        'Content-Type':
-          'application/json'
-      },
-      body: JSON.stringify({
-        subscription
-      })
-    }
-  );
+
+async function apiSubscribePush(
+  subscription
+) {
+  const res =
+    await fetch(
+      '/api/push/subscribe',
+      {
+        method: 'POST',
+        cache: 'no-store',
+        headers: {
+          'Content-Type':
+            'application/json'
+        },
+        body: JSON.stringify({
+          subscription
+        })
+      }
+    );
 
   return readJsonResponse(res);
 }
 
-/*
- * =========================
- * UI
- * =========================
- */
+
+async function apiUnsubscribePush(
+  endpoint
+) {
+  const res =
+    await fetch(
+      '/api/push/unsubscribe',
+      {
+        method: 'POST',
+        cache: 'no-store',
+        headers: {
+          'Content-Type':
+            'application/json'
+        },
+        body: JSON.stringify({
+          endpoint
+        })
+      }
+    );
+
+  return readJsonResponse(res);
+}
+
 
 function setStatus(
   text,
@@ -300,49 +321,42 @@ function setStatus(
     text || '';
 
   $('status-bar')
-    .classList
-    .toggle(
+    .classList.toggle(
       'error',
       isError
     );
 }
 
-function showChat(name) {
-  $('current-user').textContent =
-    name;
 
-  $('user-avatar').textContent =
-    name
-      .charAt(0)
-      .toUpperCase();
+function showChat(name) {
+  $('current-user')
+    .textContent = name;
+
+  $('user-avatar')
+    .textContent =
+    name.charAt(0).toUpperCase();
 
   $('login-screen')
-    .classList
-    .add('hidden');
+    .classList.add('hidden');
 
   $('chat-screen')
-    .classList
-    .remove('hidden');
-
-  updatePushUI();
+    .classList.remove('hidden');
 
   setStatus('Подключено');
 }
 
+
 function showLogin() {
   $('chat-screen')
-    .classList
-    .add('hidden');
+    .classList.add('hidden');
 
   $('login-screen')
-    .classList
-    .remove('hidden');
+    .classList.remove('hidden');
 }
 
+
 function formatTime(timestamp) {
-  if (!timestamp) {
-    return '';
-  }
+  if (!timestamp) return '';
 
   return new Intl.DateTimeFormat(
     'ru-RU',
@@ -355,14 +369,27 @@ function formatTime(timestamp) {
   );
 }
 
+
 function addMessage(
   text,
   {
     outgoing,
     sender,
-    timestamp
+    timestamp,
+    id
   }
 ) {
+  if (
+    id &&
+    renderedMessageIds.has(id)
+  ) {
+    return;
+  }
+
+  if (id) {
+    renderedMessageIds.add(id);
+  }
+
   const empty =
     $('empty-state');
 
@@ -371,7 +398,9 @@ function addMessage(
   }
 
   const wrap =
-    document.createElement('div');
+    document.createElement(
+      'div'
+    );
 
   wrap.className =
     `message-wrap ${
@@ -380,13 +409,23 @@ function addMessage(
         : 'incoming'
     }`;
 
+  if (id) {
+    wrap.dataset.messageId =
+      id;
+  }
+
   const bubble =
-    document.createElement('div');
+    document.createElement(
+      'div'
+    );
 
   bubble.className =
     'message';
 
-  if (!outgoing && sender) {
+  if (
+    !outgoing &&
+    sender
+  ) {
     const senderEl =
       document.createElement(
         'div'
@@ -424,10 +463,7 @@ function addMessage(
     'message-meta';
 
   meta.textContent =
-    formatTime(
-      timestamp ||
-      Date.now()
-    );
+    formatTime(timestamp);
 
   bubble.appendChild(
     meta
@@ -438,19 +474,12 @@ function addMessage(
   );
 
   $('messages')
-    .appendChild(
-      wrap
-    );
+    .appendChild(wrap);
 
   $('messages').scrollTop =
     $('messages').scrollHeight;
 }
 
-/*
- * =========================
- * MESSAGE DECRYPTION
- * =========================
- */
 
 async function processIncomingMessage(
   payload
@@ -462,7 +491,7 @@ async function processIncomingMessage(
     !payload?.ciphertext
   ) {
     throw new Error(
-      'Получен повреждённый пакет сообщения'
+      'Повреждённый пакет сообщения'
     );
   }
 
@@ -493,16 +522,57 @@ async function processIncomingMessage(
         payload.sender ||
         'Неизвестный',
       timestamp:
-        payload.createdAt
+        payload.createdAt,
+      id:
+        payload.id
     }
   );
 }
 
-/*
- * =========================
- * POLLING
- * =========================
- */
+
+async function loadHistory() {
+  if (!username) return;
+
+  try {
+    const data =
+      await apiGetMessages();
+
+    const messages =
+      Array.isArray(
+        data.messages
+      )
+        ? data.messages
+        : [];
+
+    /*
+     * Старые сообщения
+     * показываем от старых к новым.
+     */
+    for (const payload of messages) {
+      try {
+        await processIncomingMessage(
+          payload
+        );
+      } catch (error) {
+        console.error(
+          'History decrypt error:',
+          error
+        );
+      }
+    }
+  } catch (error) {
+    console.error(
+      'History error:',
+      error
+    );
+
+    setStatus(
+      `Ошибка загрузки истории: ${error.message}`,
+      true
+    );
+  }
+}
+
 
 async function checkMessages() {
   if (
@@ -515,6 +585,14 @@ async function checkMessages() {
   pollingInProgress = true;
 
   try {
+    /*
+     * Пока приложение открыто,
+     * периодически проверяем Redis.
+     *
+     * Push отвечает за уведомление,
+     * polling — за фактическую загрузку
+     * сообщения в интерфейс.
+     */
     const data =
       await apiGetMessages();
 
@@ -552,19 +630,8 @@ async function checkMessages() {
       );
     } else {
       setStatus(
-        messages.length
-          ? 'Новые сообщения получены'
-          : 'Подключено'
+        'Подключено'
       );
-    }
-
-    if (
-      messages.length &&
-      'clearAppBadge' in navigator
-    ) {
-      try {
-        await navigator.clearAppBadge();
-      } catch {}
     }
   } catch (error) {
     console.error(
@@ -587,65 +654,20 @@ async function checkMessages() {
       pollingTimer =
         setTimeout(
           checkMessages,
-          POLL_INTERVAL
+          3000
         );
     }
   }
 }
 
-/*
- * =========================
- * PUSH
- * =========================
- */
 
-function isStandalone() {
-  return (
-    window.matchMedia(
-      '(display-mode: standalone)'
-    ).matches ||
-    window.navigator.standalone === true
-  );
-}
-
-function pushSupported() {
-  return (
-    'serviceWorker' in navigator &&
-    'PushManager' in window &&
-    'Notification' in window
-  );
-}
-
-function setPushStatus(
-  text,
-  type = ''
-) {
-  const element =
-    $('push-status');
-
-  if (!element) {
-    return;
-  }
-
-  element.textContent =
-    text || '';
-
-  element.className =
-    `push-status ${type}`;
-}
-
-async function getServiceWorkerRegistration() {
-  return navigator.serviceWorker.ready;
-}
-
-function urlBase64ToUint8Array(
+function base64ToUint8Array(
   base64String
 ) {
   const padding =
     '='.repeat(
       (4 -
-        (base64String.length %
-          4)) %
+        (base64String.length % 4)) %
         4
     );
 
@@ -654,265 +676,352 @@ function urlBase64ToUint8Array(
       base64String +
       padding
     )
-      .replace(
-        /-/g,
-        '+'
-      )
-      .replace(
-        /_/g,
-        '/'
-      );
+      .replace(/-/g, '+')
+      .replace(/_/g, '/');
 
   const rawData =
     window.atob(base64);
 
-  const outputArray =
-    new Uint8Array(
-      rawData.length
-    );
+  return Uint8Array.from(
+    [...rawData].map(
+      (char) =>
+        char.charCodeAt(0)
+    )
+  );
+}
 
-  for (
-    let i = 0;
-    i < rawData.length;
-    i++
+
+async function enableNotifications() {
+  if (
+    !('serviceWorker' in navigator)
   ) {
-    outputArray[i] =
-      rawData.charCodeAt(i);
+    throw new Error(
+      'Service Worker не поддерживается'
+    );
   }
 
-  return outputArray;
+  if (
+    !('PushManager' in window)
+  ) {
+    throw new Error(
+      'Push API не поддерживается'
+    );
+  }
+
+  if (
+    !('Notification' in window)
+  ) {
+    throw new Error(
+      'Notifications API не поддерживается'
+    );
+  }
+
+  const standalone =
+    window.matchMedia(
+      '(display-mode: standalone)'
+    ).matches ||
+    window.navigator.standalone === true;
+
+  if (!standalone) {
+    throw new Error(
+      'Сначала добавьте NCR Messenger на экран «Домой»'
+    );
+  }
+
+  const permission =
+    await Notification.requestPermission();
+
+  if (
+    permission !== 'granted'
+  ) {
+    throw new Error(
+      'Разрешение на уведомления не предоставлено'
+    );
+  }
+
+  const registration =
+    await navigator.serviceWorker.ready;
+
+  const config =
+    await apiGetPushConfig();
+
+  const existing =
+    await registration.pushManager
+      .getSubscription();
+
+  let subscription =
+    existing;
+
+  if (!subscription) {
+    subscription =
+      await registration.pushManager
+        .subscribe({
+          userVisibleOnly: true,
+
+          applicationServerKey:
+            base64ToUint8Array(
+              config.publicKey
+            )
+        });
+  }
+
+  await apiSubscribePush(
+    subscription.toJSON()
+  );
+
+  localStorage.setItem(
+    'ncr_push_enabled',
+    '1'
+  );
+
+  $('notification-icon')
+    .textContent = '🔔';
+
+  setStatus(
+    'Уведомления включены'
+  );
 }
 
-async function getVapidPublicKey() {
-  const res =
-    await fetch(
-      '/api/push/config',
-      {
-        cache: 'no-store',
-        credentials:
-          'same-origin'
-      }
+
+async function disableNotifications() {
+  const registration =
+    await navigator.serviceWorker.ready;
+
+  const subscription =
+    await registration.pushManager
+      .getSubscription();
+
+  if (subscription) {
+    await apiUnsubscribePush(
+      subscription.endpoint
     );
 
-  const data =
-    await readJsonResponse(res);
+    await subscription.unsubscribe();
+  }
 
-  return data.publicKey;
+  localStorage.removeItem(
+    'ncr_push_enabled'
+  );
+
+  $('notification-icon')
+    .textContent = '🔕';
+
+  setStatus(
+    'Уведомления выключены'
+  );
 }
 
-async function enablePushNotifications() {
-  if (!pushSupported()) {
-    setPushStatus(
-      'Этот браузер не поддерживает Push',
-      'error'
-    );
+
+async function setupNotificationButton() {
+  if (
+    !('Notification' in window)
+  ) {
+    $('notification-btn')
+      .classList.add('hidden');
 
     return;
   }
 
   if (
-    /iPhone|iPad|iPod/i.test(
-      navigator.userAgent
-    ) &&
-    !isStandalone()
+    Notification.permission ===
+    'granted'
   ) {
-    setPushStatus(
-      'Сначала добавьте NCR Messenger на экран «Домой»',
-      'warning'
-    );
-
-    return;
-  }
-
-  try {
-    setPushStatus(
-      'Подготовка уведомлений…'
-    );
-
-    const permission =
-      await Notification.requestPermission();
-
-    if (
-      permission !== 'granted'
-    ) {
-      setPushStatus(
-        'Уведомления запрещены',
-        'error'
-      );
-
-      return;
-    }
-
-    const registration =
-      await getServiceWorkerRegistration();
-
-    let subscription =
-      await registration.pushManager.getSubscription();
-
-    if (!subscription) {
-      const vapidPublicKey =
-        await getVapidPublicKey();
-
-      subscription =
-        await registration.pushManager.subscribe(
-          {
-            userVisibleOnly: true,
-            applicationServerKey:
-              urlBase64ToUint8Array(
-                vapidPublicKey
-              )
-          }
-        );
-    }
-
-    const subscriptionJSON =
-      subscription.toJSON();
-
-    await apiPushSubscribe(
-      subscriptionJSON
-    );
-
-    pushSubscription =
-      subscription;
-
-    updatePushUI();
-
-    setPushStatus(
-      'Уведомления включены',
-      'success'
-    );
-  } catch (error) {
-    console.error(
-      'Push subscription error:',
-      error
-    );
-
-    setPushStatus(
-      `Ошибка уведомлений: ${error.message}`,
-      'error'
-    );
+    $('notification-icon')
+      .textContent = '🔔';
+  } else {
+    $('notification-icon')
+      .textContent = '🔕';
   }
 }
 
-async function disablePushNotifications() {
-  if (!pushSupported()) {
-    return;
-  }
 
-  try {
-    const registration =
-      await getServiceWorkerRegistration();
+$('notification-btn')
+  .addEventListener(
+    'click',
+    async () => {
+      const button =
+        $('notification-btn');
 
-    const subscription =
-      await registration.pushManager.getSubscription();
+      button.disabled = true;
 
-    if (subscription) {
       try {
-        await apiPushUnsubscribe(
-          subscription.toJSON()
-        );
+        if (
+          Notification.permission ===
+          'granted'
+        ) {
+          await enableNotifications();
+        } else {
+          await enableNotifications();
+        }
       } catch (error) {
-        console.warn(
-          'Unable to unregister push:',
+        console.error(
+          'Notification error:',
           error
         );
+
+        setStatus(
+          error.message,
+          true
+        );
+      } finally {
+        button.disabled = false;
+      }
+    }
+  );
+
+
+$('login-form')
+  .addEventListener(
+    'submit',
+    async (event) => {
+      event.preventDefault();
+
+      if (authInProgress) {
+        return;
       }
 
-      await subscription.unsubscribe();
+      const name =
+        $('username-input')
+          .value
+          .trim();
+
+      const password =
+        $('password-input')
+          .value;
+
+      $('login-error')
+        .textContent = '';
+
+      if (!name || !password) {
+        return;
+      }
+
+      authInProgress = true;
+
+      $('login-btn').disabled =
+        true;
+
+      $('login-btn').textContent =
+        'Подключение…';
+
+      try {
+        loadOrGenerateKeys(name);
+
+        await apiAuth(
+          name,
+          password,
+          publicKey
+        );
+
+        username = name;
+
+        localStorage.setItem(
+          'ncrlwe_last_username',
+          name
+        );
+
+        renderedMessageIds.clear();
+
+        $('messages').innerHTML = `
+          <div
+            id="empty-state"
+            class="empty-state"
+          >
+            <div class="empty-icon">✉</div>
+            <h2>Сообщений пока нет</h2>
+            <p>
+              Введите имя получателя
+              ниже и отправьте первое
+              сообщение.
+            </p>
+          </div>
+        `;
+
+        showChat(name);
+
+        await setupNotificationButton();
+
+        await loadHistory();
+
+        await checkMessages();
+      } catch (error) {
+        console.error(
+          'Login error:',
+          error
+        );
+
+        $('login-error')
+          .textContent =
+          error.message;
+      } finally {
+        authInProgress = false;
+
+        $('login-btn').disabled =
+          false;
+
+        $('login-btn').textContent =
+          'Войти / создать аккаунт';
+      }
     }
+  );
 
-    pushSubscription = null;
 
-    updatePushUI();
+$('logout-btn')
+  .addEventListener(
+    'click',
+    () => {
+      username = null;
 
-    setPushStatus(
-      'Уведомления выключены'
-    );
-  } catch (error) {
-    console.error(
-      'Push unsubscribe error:',
-      error
-    );
-
-    setPushStatus(
-      `Ошибка: ${error.message}`,
-      'error'
-    );
-  }
-}
-
-async function updatePushUI() {
-  const button =
-    $('push-btn');
-
-  if (!button) {
-    return;
-  }
-
-  if (!pushSupported()) {
-    button.classList.add(
-      'hidden'
-    );
-
-    return;
-  }
-
-  if (
-    /iPhone|iPad|iPod/i.test(
-      navigator.userAgent
-    ) &&
-    !isStandalone()
-  ) {
-    button.textContent =
-      '📱 Добавить на экран «Домой»';
-
-    button.disabled = true;
-
-    return;
-  }
-
-  try {
-    const registration =
-      await getServiceWorkerRegistration();
-
-    const subscription =
-      await registration.pushManager.getSubscription();
-
-    pushSubscription =
-      subscription;
-
-    if (
-      subscription &&
-      Notification.permission ===
-        'granted'
-    ) {
-      button.textContent =
-        '🔔 Уведомления включены';
-
-      button.classList.add(
-        'enabled'
+      clearTimeout(
+        pollingTimer
       );
 
-      return;
+      pollingTimer = null;
+
+      pollingInProgress = false;
+
+      privateKey = null;
+      publicKey = null;
+
+      renderedMessageIds.clear();
+
+      $('messages').innerHTML = `
+        <div
+          id="empty-state"
+          class="empty-state"
+        >
+          <div class="empty-icon">✉</div>
+
+          <h2>
+            Сообщений пока нет
+          </h2>
+
+          <p>
+            Введите имя получателя
+            ниже и отправьте первое
+            сообщение.
+          </p>
+        </div>
+      `;
+
+      $('login-error')
+        .textContent = '';
+
+      showLogin();
     }
+  );
 
-    button.textContent =
-      '🔔 Включить уведомления';
 
-    button.classList.remove(
-      'enabled'
-    );
-  } catch {
-    button.textContent =
-      '🔔 Включить уведомления';
-  }
-}
+$('composer')
+  .addEventListener(
+    'submit',
+    (event) => {
+      event.preventDefault();
 
-/*
- * =========================
- * SEND
- * =========================
- */
+      sendMessage();
+    }
+  );
+
 
 async function sendMessage() {
   if (!username) {
@@ -967,23 +1076,32 @@ async function sendMessage() {
       );
 
     const payload = {
-      U: ciphertext.U,
-      V: ciphertext.V,
-      nonce: encrypted.nonce,
+      U:
+        ciphertext.U,
+
+      V:
+        ciphertext.V,
+
+      nonce:
+        encrypted.nonce,
+
       ciphertext:
         encrypted.ciphertext
     };
 
-    await apiSend(
-      recipient,
-      payload
-    );
+    const result =
+      await apiSend(
+        recipient,
+        payload
+      );
 
     addMessage(
       message,
       {
         outgoing: true,
-        timestamp: Date.now()
+        sender: username,
+        timestamp: Date.now(),
+        id: result.id
       }
     );
 
@@ -1014,6 +1132,7 @@ async function sendMessage() {
   }
 }
 
+
 function autoGrowTextarea() {
   const textarea =
     $('message-input');
@@ -1024,204 +1143,17 @@ function autoGrowTextarea() {
   textarea.style.height =
     `${Math.min(
       textarea.scrollHeight,
-      140
+      120
     )}px`;
 }
 
-/*
- * =========================
- * SERVICE WORKER EVENTS
- * =========================
- */
-
-function registerServiceWorkerMessages() {
-  if (
-    !('serviceWorker' in navigator)
-  ) {
-    return;
-  }
-
-  navigator.serviceWorker.addEventListener(
-    'message',
-    async (event) => {
-      if (
-        event.data?.type ===
-        'push-message'
-      ) {
-        /*
-         * Если приложение открыто,
-         * сразу забираем сообщение.
-         */
-        if (username) {
-          await checkMessages();
-        }
-      }
-
-      if (
-        event.data?.type ===
-        'notification-click'
-      ) {
-        if (username) {
-          await checkMessages();
-        }
-      }
-    }
-  );
-}
-
-/*
- * =========================
- * LOGIN
- * =========================
- */
-
-$('login-form')
-  .addEventListener(
-    'submit',
-    async (event) => {
-      event.preventDefault();
-
-      if (authInProgress) {
-        return;
-      }
-
-      const name =
-        $('username-input')
-          .value
-          .trim();
-
-      const password =
-        $('password-input')
-          .value;
-
-      $('login-error')
-        .textContent = '';
-
-      if (
-        !name ||
-        !password
-      ) {
-        return;
-      }
-
-      authInProgress =
-        true;
-
-      $('login-btn').disabled =
-        true;
-
-      $('login-btn')
-        .textContent =
-        'Подключение…';
-
-      try {
-        loadOrGenerateKeys(
-          name
-        );
-
-        await apiAuth(
-          name,
-          password,
-          publicKey
-        );
-
-        username = name;
-
-        localStorage.setItem(
-          'ncrlwe_last_username',
-          name
-        );
-
-        showChat(name);
-
-        await checkMessages();
-      } catch (error) {
-        console.error(
-          'Login error:',
-          error
-        );
-
-        $('login-error')
-          .textContent =
-          error.message;
-      } finally {
-        authInProgress =
-          false;
-
-        $('login-btn')
-          .disabled = false;
-
-        $('login-btn')
-          .textContent =
-          'Войти / создать аккаунт';
-      }
-    }
-  );
-
-/*
- * =========================
- * LOGOUT
- * =========================
- */
-
-$('logout-btn')
-  .addEventListener(
-    'click',
-    () => {
-      username = null;
-
-      clearTimeout(
-        pollingTimer
-      );
-
-      pollingTimer =
-        null;
-
-      privateKey =
-        null;
-
-      publicKey =
-        null;
-
-      pushSubscription =
-        null;
-
-      $('messages').innerHTML = `
-        <div id="empty-state" class="empty-state">
-          <div class="empty-icon">✉</div>
-          <h2>Сообщений пока нет</h2>
-          <p>Введите имя получателя ниже и отправьте первое сообщение.</p>
-        </div>
-      `;
-
-      $('login-error')
-        .textContent = '';
-
-      showLogin();
-    }
-  );
-
-/*
- * =========================
- * COMPOSER
- * =========================
- */
-
-$('composer')
-  .addEventListener(
-    'submit',
-    (event) => {
-      event.preventDefault();
-
-      sendMessage();
-    }
-  );
 
 $('message-input')
   .addEventListener(
     'input',
     autoGrowTextarea
   );
+
 
 $('message-input')
   .addEventListener(
@@ -1238,31 +1170,6 @@ $('message-input')
     }
   );
 
-/*
- * =========================
- * PUSH BUTTON
- * =========================
- */
-
-$('push-btn')
-  .addEventListener(
-    'click',
-    async () => {
-      if (
-        pushSubscription
-      ) {
-        await disablePushNotifications();
-      } else {
-        await enablePushNotifications();
-      }
-    }
-  );
-
-/*
- * =========================
- * STARTUP
- * =========================
- */
 
 const lastUsername =
   localStorage.getItem(
@@ -1271,35 +1178,20 @@ const lastUsername =
 
 if (lastUsername) {
   $('username-input')
-    .value =
-    lastUsername;
+    .value = lastUsername;
 }
 
-registerServiceWorkerMessages();
 
 if (
   'serviceWorker' in navigator
 ) {
   navigator.serviceWorker
-    .register(
-      '/sw.js',
-      {
-        updateViaCache: 'none'
-      }
-    )
-    .then(
-      (registration) => {
-        registration.update()
-          .catch(() => {});
-      }
-    )
+    .register('/sw.js')
     .catch(
-      (error) => {
+      (error) =>
         console.warn(
-          'SW:',
+          'Service Worker:',
           error
-        );
-      }
+        )
     );
 }
-

@@ -1,7 +1,9 @@
-import { getVapidPublicKey } from '../../lib/push.js';
+import { getRedis } from '../../lib/redis.js';
+
 import {
+  securityHeaders,
   noStore,
-  securityHeaders
+  requireSession
 } from '../../lib/security.js';
 
 export default async function handler(req, res) {
@@ -15,14 +17,37 @@ export default async function handler(req, res) {
   }
 
   try {
+    const redis = getRedis();
+
+    const session =
+      await requireSession(
+        req,
+        res,
+        redis
+      );
+
+    if (!session) return;
+
+    const publicKey =
+      process.env.VAPID_PUBLIC_KEY;
+
+    if (!publicKey) {
+      return res.status(500).json({
+        error: 'Push не настроен'
+      });
+    }
+
     return res.status(200).json({
-      publicKey: getVapidPublicKey()
+      publicKey
     });
   } catch (error) {
-    console.error('GET /api/push/config:', error?.message || error);
+    console.error(
+      'GET /api/push/config:',
+      error
+    );
 
     return res.status(500).json({
-      error: 'Push notifications are not configured'
+      error: 'Ошибка push-конфигурации'
     });
   }
 }

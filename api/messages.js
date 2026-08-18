@@ -4,7 +4,7 @@ import {
   noStore,
   securityHeaders,
   requireSession,
-  requireSameOrigin
+  normalizeUsername
 } from '../lib/security.js';
 
 export default async function handler(req, res) {
@@ -15,10 +15,6 @@ export default async function handler(req, res) {
     return res.status(405).json({
       error: 'Method not allowed'
     });
-  }
-
-  if (!requireSameOrigin(req, res)) {
-    return;
   }
 
   try {
@@ -34,23 +30,39 @@ export default async function handler(req, res) {
       return;
     }
 
+    const requestedUsername = normalizeUsername(
+      req.query?.username
+    );
+
+    /*
+     * Клиент не может читать очередь другого пользователя.
+     */
+    if (
+      requestedUsername &&
+      requestedUsername !== session.username
+    ) {
+      return res.status(403).json({
+        error: 'Доступ запрещён'
+      });
+    }
+
     const username = session.username;
+
     const key = `messages:${username}`;
 
     /*
-     * ВАЖНО:
-     *
-     * Здесь мы только читаем очередь.
-     * Ничего не удаляем.
-     *
-     * Клиент должен сначала расшифровать сообщение
-     * и затем подтвердить его через /api/ack.
+     * LRANGE + DEL выполняются атомарно.
      */
-    const rawMessages = await redis.lrange(
-      key,
-      0,
-      -1
-    );
+    const result = await redis
+      .multi()
+      .lrange(key, 0, -1)
+      .del(key)
+      .exec();
+
+    const rawMessages =
+      Array.isArray(result?.[0])
+        ? result[0]
+        : [];
 
     const messages = [];
 
@@ -63,21 +75,14 @@ export default async function handler(req, res) {
 
         if (
           parsed &&
-          typeof parsed === 'object' &&
-          parsed.id &&
-          parsed.sender &&
-          parsed.recipient
+          typeof parsed === 'object'
         ) {
           messages.push(parsed);
         }
-      } catch (error) {
-        /*
-         * Повреждённый элемент очереди не должен
-         * ломать выдачу остальных сообщений.
-         */
+      } catch (parseError) {
         console.error(
           'Invalid message in Redis:',
-          error?.message || error
+          parseError
         );
       }
     }

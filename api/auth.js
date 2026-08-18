@@ -1,102 +1,224 @@
 import { hash, verify } from '@node-rs/argon2';
 import { getRedis } from '../lib/redis.js';
+
 import {
-  MAX_PASSWORD_LENGTH, normalizeUsername, validUsername, newToken, sha256,
-  setSessionCookie, noStore, requireSameOrigin, rateLimit, jsonBodySize
+  MAX_PASSWORD_LENGTH,
+  normalizeUsername,
+  validUsername,
+  newToken,
+  sha256,
+  setSessionCookie,
+  noStore,
+  requireSameOrigin,
+  rateLimit,
+  jsonBodySize,
+  securityHeaders
 } from '../lib/security.js';
-import { securityHeaders } from '../lib/security.js';
 
 const SESSION_TTL = 60 * 60 * 24 * 30;
 const MIN_PASSWORD_LENGTH = 8;
 
 function genericAuthError(res) {
-  return res.status(401).json({ error: 'Неверные учетные данные' });
+  return res.status(401).json({
+    error: 'Неверные учетные данные'
+  });
 }
 
 export default async function handler(req, res) {
   securityHeaders(res);
   noStore(res);
 
-  if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' });
-  if (!requireSameOrigin(req, res)) return;
-  if (jsonBodySize(req) > 16 * 1024) return res.status(413).json({ error: 'Слишком большой запрос' });
+  if (req.method !== 'POST') {
+    return res.status(405).json({
+      error: 'Method not allowed'
+    });
+  }
+
+  if (!requireSameOrigin(req, res)) {
+    return;
+  }
+
+  if (jsonBodySize(req) > 16 * 1024) {
+    return res.status(413).json({
+      error: 'Слишком большой запрос'
+    });
+  }
 
   try {
     const body = req.body || {};
-    const username = normalizeUsername(body.username);
-    const password = String(body.password ?? '');
-    const publicKey = body.publicKey;
 
-    if (!validUsername(username) || password.length < MIN_PASSWORD_LENGTH || password.length > MAX_PASSWORD_LENGTH) {
+    const username =
+      normalizeUsername(body.username);
+
+    const password =
+      String(body.password ?? '');
+
+    const publicKey =
+      body.publicKey;
+
+    if (
+      !validUsername(username) ||
+      password.length < MIN_PASSWORD_LENGTH ||
+      password.length > MAX_PASSWORD_LENGTH
+    ) {
       return genericAuthError(res);
     }
 
     const redis = getRedis();
-    const rl = await rateLimit(redis, `login:${username}:${req.headers['x-forwarded-for'] || 'unknown'}`, 5, 300);
-    if (!rl.allowed) return res.status(429).json({ error: 'Слишком много попыток. Попробуйте позже.' });
+
+    const ip =
+      req.headers['x-forwarded-for'] ||
+      'unknown';
+
+    const rl = await rateLimit(
+      redis,
+      `login:${username}:${ip}`,
+      5,
+      300
+    );
+
+    if (!rl.allowed) {
+      return res.status(429).json({
+        error: 'Слишком много попыток. Попробуйте позже.'
+      });
+    }
 
     const userKey = `user:${username}`;
-    const existing = await redis.get(userKey);
+
+    const existing =
+      await redis.get(userKey);
 
     if (!existing) {
-      if (!publicKey || typeof publicKey !== 'object') {
-        return res.status(400).json({ error: 'Для нового аккаунта требуется publicKey' });
+      if (
+        !publicKey ||
+        typeof publicKey !== 'object'
+      ) {
+        return res.status(400).json({
+          error:
+            'Для нового аккаунта требуется publicKey'
+        });
       }
-      const passwordHash = await hash(password, {
-        memoryCost: 19456,
-        timeCost: 2,
-        parallelism: 1
-      });
 
-      await redis.set(userKey, JSON.stringify({
-        username,
-        passwordHash,
-        createdAt: Date.now()
-      }));
-      await redis.set(`publicKey:${username}`, publicKey);
+      const passwordHash = await hash(
+        password,
+        {
+          algorithm: 'argon2id',
+          memoryCost: 19456,
+          timeCost: 2,
+          parallelism: 1
+        }
+      );
+
+      await redis.set(
+        userKey,
+        JSON.stringify({
+          username,
+          passwordHash,
+          createdAt: Date.now()
+        })
+      );
+
+      await redis.set(
+        `publicKey:${username}`,
+        publicKey
+      );
     } else {
-      const user = typeof existing === 'string' ? JSON.parse(existing) : existing;
+      const user =
+        typeof existing === 'string'
+          ? JSON.parse(existing)
+          : existing;
+
       let valid = false;
 
       if (user?.passwordHash) {
-        valid = await verify(user.passwordHash, password);
+        valid = await verify(
+          user.passwordHash,
+          password
+        );
       }
 
-      // One-time compatibility migration from the old SHA-256 password format.
-      if (!valid && user?.passwordHash?.startsWith('sha256:')) {
-        const legacy = sha256(password);
-        if (legacy === user.passwordHash.slice(7)) {
-          const upgraded = await hash(password, {
-            memoryCost: 19456,
-            timeCost: 2,
-            parallelism: 1
-          });
-          user.passwordHash = upgraded;
-          await redis.set(userKey, JSON.stringify(user));
+      if (
+        !valid &&
+        user?.passwordHash?.startsWith('sha256:')
+      ) {
+        const legacy =
+          sha256(password);
+
+        if (
+          legacy ===
+          user.passwordHash.slice(7)
+        ) {
+          const upgraded =
+            await hash(password, {
+              algorithm: 'argon2id',
+              memoryCost: 19456,
+              timeCost: 2,
+              parallelism: 1
+            });
+
+          user.passwordHash =
+            upgraded;
+
+          await redis.set(
+            userKey,
+            JSON.stringify(user)
+          );
+
           valid = true;
         }
       }
 
-      if (!valid) return genericAuthError(res);
+      if (!valid) {
+        return genericAuthError(res);
+      }
 
-      // Do not silently replace the recipient's identity key on login.
       if (publicKey) {
-        const storedKey = await redis.get(`publicKey:${username}`);
-        if (!storedKey) await redis.set(`publicKey:${username}`, publicKey);
+        const storedKey =
+          await redis.get(
+            `publicKey:${username}`
+          );
+
+        if (!storedKey) {
+          await redis.set(
+            `publicKey:${username}`,
+            publicKey
+          );
+        }
       }
     }
 
-    const token = newToken(32);
+    const token =
+      newToken(32);
+
     await redis.set(
       `session:${sha256(token)}`,
-      JSON.stringify({ username, createdAt: Date.now() }),
-      { ex: SESSION_TTL }
+      JSON.stringify({
+        username,
+        createdAt: Date.now()
+      }),
+      {
+        ex: SESSION_TTL
+      }
     );
-    setSessionCookie(res, token, SESSION_TTL);
 
-    return res.status(200).json({ status: 'ok', username });
+    setSessionCookie(
+      res,
+      token,
+      SESSION_TTL
+    );
+
+    return res.status(200).json({
+      status: 'ok',
+      username
+    });
   } catch (error) {
-    console.error('POST /api/auth:', error?.message || error);
-    return res.status(500).json({ error: 'Ошибка авторизации' });
+    console.error(
+      'POST /api/auth:',
+      error?.message || error
+    );
+
+    return res.status(500).json({
+      error: 'Ошибка авторизации'
+    });
   }
 }

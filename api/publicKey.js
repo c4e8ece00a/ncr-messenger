@@ -1,8 +1,8 @@
 import { getRedis } from '../lib/redis.js';
 
 import {
-  noStore,
   securityHeaders,
+  noStore,
   requireSession,
   normalizeUsername,
   validUsername
@@ -21,19 +21,19 @@ export default async function handler(req, res) {
   try {
     const redis = getRedis();
 
-    const session = await requireSession(
-      req,
-      res,
-      redis
-    );
+    const session =
+      await requireSession(
+        req,
+        res,
+        redis
+      );
 
-    if (!session) {
-      return;
-    }
+    if (!session) return;
 
-    const username = normalizeUsername(
-      req.query?.username
-    );
+    const username =
+      normalizeUsername(
+        req.query?.username
+      );
 
     if (!validUsername(username)) {
       return res.status(400).json({
@@ -41,9 +41,10 @@ export default async function handler(req, res) {
       });
     }
 
-    const publicKey = await redis.get(
-      `publicKey:${username}`
-    );
+    const publicKey =
+      await redis.get(
+        `publicKey:${username}`
+      );
 
     if (!publicKey) {
       return res.status(404).json({

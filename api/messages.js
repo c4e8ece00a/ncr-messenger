@@ -1,11 +1,14 @@
 import { getRedis } from '../lib/redis.js';
 
 import {
-  noStore,
   securityHeaders,
+  noStore,
   requireSession,
-  normalizeUsername
+  normalizeUsername,
+  validUsername
 } from '../lib/security.js';
+
+const MAX_HISTORY = 200;
 
 export default async function handler(req, res) {
   securityHeaders(res);
@@ -20,49 +23,38 @@ export default async function handler(req, res) {
   try {
     const redis = getRedis();
 
-    const session = await requireSession(
-      req,
-      res,
-      redis
-    );
+    const session =
+      await requireSession(
+        req,
+        res,
+        redis
+      );
 
-    if (!session) {
-      return;
-    }
+    if (!session) return;
 
-    const requestedUsername = normalizeUsername(
-      req.query?.username
-    );
+    const username =
+      normalizeUsername(
+        req.query?.username
+      );
 
-    /*
-     * Клиент не может читать очередь другого пользователя.
-     */
     if (
-      requestedUsername &&
-      requestedUsername !== session.username
+      !validUsername(username) ||
+      username !== session.username
     ) {
       return res.status(403).json({
-        error: 'Доступ запрещён'
+        error: 'Недопустимый пользователь'
       });
     }
 
-    const username = session.username;
-
-    const key = `messages:${username}`;
-
-    /*
-     * LRANGE + DEL выполняются атомарно.
-     */
-    const result = await redis
-      .multi()
-      .lrange(key, 0, -1)
-      .del(key)
-      .exec();
+    const key =
+      `messages:${username}`;
 
     const rawMessages =
-      Array.isArray(result?.[0])
-        ? result[0]
-        : [];
+      await redis.lrange(
+        key,
+        -MAX_HISTORY,
+        -1
+      );
 
     const messages = [];
 
@@ -79,10 +71,10 @@ export default async function handler(req, res) {
         ) {
           messages.push(parsed);
         }
-      } catch (parseError) {
+      } catch (error) {
         console.error(
-          'Invalid message in Redis:',
-          parseError
+          'Invalid message:',
+          error
         );
       }
     }

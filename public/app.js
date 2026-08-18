@@ -1,9 +1,12 @@
 let username = null;
 let privateKey = null;
 let publicKey = null;
+
 let pollingTimer = null;
 let pollingInProgress = false;
 let authInProgress = false;
+
+const seenMessageIds = new Set();
 
 const $ = (id) => document.getElementById(id);
 
@@ -18,7 +21,11 @@ function loadOrGenerateKeys(name) {
   if (stored) {
     try {
       const parsed = JSON.parse(stored);
-      if (parsed?.privateKey && parsed?.publicKey) {
+
+      if (
+        parsed?.privateKey &&
+        parsed?.publicKey
+      ) {
         privateKey = parsed.privateKey;
         publicKey = parsed.publicKey;
         return;
@@ -29,293 +36,840 @@ function loadOrGenerateKeys(name) {
   }
 
   const keys = NCRLWE.generateKeypair();
+
   privateKey = keys.privateKey;
   publicKey = keys.publicKey;
-  localStorage.setItem(storageKey, JSON.stringify({ privateKey, publicKey }));
+
+  localStorage.setItem(
+    storageKey,
+    JSON.stringify({
+      privateKey,
+      publicKey
+    })
+  );
 }
 
 async function deriveAesKey(K) {
   const bytes = NCRLWE.matrixToBytes(K);
-  const hash = await crypto.subtle.digest('SHA-256', bytes);
-  return crypto.subtle.importKey('raw', hash, { name: 'AES-GCM' }, false, ['encrypt', 'decrypt']);
-}
 
-async function encryptMessage(aesKey, plaintext) {
-  const nonce = crypto.getRandomValues(new Uint8Array(12));
-  const encoded = new TextEncoder().encode(plaintext);
-  const ciphertext = await crypto.subtle.encrypt({ name: 'AES-GCM', iv: nonce }, aesKey, encoded);
-  return { nonce: Array.from(nonce), ciphertext: Array.from(new Uint8Array(ciphertext)) };
-}
-
-async function decryptMessage(aesKey, nonce, ciphertext) {
-  const decoded = await crypto.subtle.decrypt(
-    { name: 'AES-GCM', iv: new Uint8Array(nonce) },
-    aesKey,
-    new Uint8Array(ciphertext)
+  const hash = await crypto.subtle.digest(
+    'SHA-256',
+    bytes
   );
-  return new TextDecoder().decode(decoded);
+
+  return crypto.subtle.importKey(
+    'raw',
+    hash,
+    {
+      name: 'AES-GCM'
+    },
+    false,
+    [
+      'encrypt',
+      'decrypt'
+    ]
+  );
+}
+
+async function encryptMessage(
+  aesKey,
+  plaintext
+) {
+  const nonce =
+    crypto.getRandomValues(
+      new Uint8Array(12)
+    );
+
+  const encoded =
+    new TextEncoder().encode(
+      plaintext
+    );
+
+  const ciphertext =
+    await crypto.subtle.encrypt(
+      {
+        name: 'AES-GCM',
+        iv: nonce
+      },
+      aesKey,
+      encoded
+    );
+
+  return {
+    nonce: Array.from(nonce),
+    ciphertext: Array.from(
+      new Uint8Array(ciphertext)
+    )
+  };
+}
+
+async function decryptMessage(
+  aesKey,
+  nonce,
+  ciphertext
+) {
+  const decoded =
+    await crypto.subtle.decrypt(
+      {
+        name: 'AES-GCM',
+        iv: new Uint8Array(nonce)
+      },
+      aesKey,
+      new Uint8Array(ciphertext)
+    );
+
+  return new TextDecoder().decode(
+    decoded
+  );
 }
 
 async function readJsonResponse(res) {
   const text = await res.text();
+
   let data = {};
-  try { data = text ? JSON.parse(text) : {}; } catch {}
-  if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+
+  try {
+    data = text
+      ? JSON.parse(text)
+      : {};
+  } catch {
+    // Некорректный JSON.
+  }
+
+  if (!res.ok) {
+    throw new Error(
+      data.error ||
+      `HTTP ${res.status}`
+    );
+  }
+
   return data;
 }
 
-async function apiAuth(name, password, key) {
-  const res = await fetch('/api/auth', {
-    method: 'POST',
-    cache: 'no-store',
-    credentials: 'same-origin',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ username: name, password, publicKey: key })
-  });
+async function apiAuth(
+  name,
+  password,
+  key
+) {
+  const res = await fetch(
+    '/api/auth',
+    {
+      method: 'POST',
+      cache: 'no-store',
+      headers: {
+        'Content-Type':
+          'application/json'
+      },
+      body: JSON.stringify({
+        username: name,
+        password,
+        publicKey: key
+      })
+    }
+  );
+
   return readJsonResponse(res);
 }
 
 async function apiGetPublicKey(name) {
-  const url = `/api/publicKey?username=${encodeURIComponent(name)}`;
-  const res = await fetch(url, { method: 'GET', cache: 'no-store', credentials: 'same-origin' });
-  return (await readJsonResponse(res)).publicKey;
+  const url =
+    `/api/publicKey?username=${encodeURIComponent(name)}&_=${Date.now()}`;
+
+  const res = await fetch(
+    url,
+    {
+      method: 'GET',
+      cache: 'no-store'
+    }
+  );
+
+  const data =
+    await readJsonResponse(res);
+
+  return data.publicKey;
 }
 
-async function apiSend(recipient, payload) {
-  const res = await fetch('/api/send', {
-    method: 'POST',
-    cache: 'no-store',
-    credentials: 'same-origin',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ recipient, payload })
-  });
+async function apiSend(
+  recipient,
+  payload
+) {
+  const res = await fetch(
+    '/api/send',
+    {
+      method: 'POST',
+      cache: 'no-store',
+      headers: {
+        'Content-Type':
+          'application/json'
+      },
+      body: JSON.stringify({
+        recipient,
+        payload
+      })
+    }
+  );
+
   return readJsonResponse(res);
 }
 
 async function apiGetMessages() {
-  const res = await fetch('/api/messages', {
-    method: 'GET',
-    cache: 'no-store',
-    credentials: 'same-origin'
-  });
+  const url =
+    `/api/messages?_=${Date.now()}`;
+
+  const res = await fetch(
+    url,
+    {
+      method: 'GET',
+      cache: 'no-store'
+    }
+  );
+
   return readJsonResponse(res);
 }
 
-async function apiLogout() {
-  const res = await fetch('/api/logout', {
-    method: 'POST',
-    cache: 'no-store',
-    credentials: 'same-origin'
-  });
+async function apiAck(messageId) {
+  const res = await fetch(
+    '/api/ack',
+    {
+      method: 'POST',
+      cache: 'no-store',
+      headers: {
+        'Content-Type':
+          'application/json'
+      },
+      body: JSON.stringify({
+        messageId
+      })
+    }
+  );
+
   return readJsonResponse(res);
 }
 
-function setStatus(text, isError = false) {
-  $('status-bar').textContent = text || '';
-  $('status-bar').classList.toggle('error', isError);
+function setStatus(
+  text,
+  isError = false
+) {
+  $('status-bar').textContent =
+    text || '';
+
+  $('status-bar')
+    .classList
+    .toggle(
+      'error',
+      isError
+    );
 }
 
 function showChat(name) {
-  $('current-user').textContent = name;
-  $('user-avatar').textContent = name.charAt(0).toUpperCase();
-  $('login-screen').classList.add('hidden');
-  $('chat-screen').classList.remove('hidden');
+  $('current-user').textContent =
+    name;
+
+  $('user-avatar').textContent =
+    name
+      .charAt(0)
+      .toUpperCase();
+
+  $('login-screen')
+    .classList
+    .add('hidden');
+
+  $('chat-screen')
+    .classList
+    .remove('hidden');
+
   setStatus('Подключено');
 }
 
 function showLogin() {
-  $('chat-screen').classList.add('hidden');
-  $('login-screen').classList.remove('hidden');
+  $('chat-screen')
+    .classList
+    .add('hidden');
+
+  $('login-screen')
+    .classList
+    .remove('hidden');
 }
 
 function formatTime(timestamp) {
-  if (!timestamp) return '';
-  return new Intl.DateTimeFormat('ru-RU', { hour: '2-digit', minute: '2-digit' }).format(timestamp);
-}
-
-function addMessage(text, { outgoing, sender, timestamp }) {
-  const empty = $('empty-state');
-  if (empty) empty.remove();
-
-  const wrap = document.createElement('div');
-  wrap.className = `message-wrap ${outgoing ? 'outgoing' : 'incoming'}`;
-
-  const bubble = document.createElement('div');
-  bubble.className = 'message';
-
-  if (!outgoing && sender) {
-    const senderEl = document.createElement('div');
-    senderEl.className = 'message-sender';
-    senderEl.textContent = sender;
-    bubble.appendChild(senderEl);
+  if (!timestamp) {
+    return '';
   }
 
-  const textEl = document.createElement('div');
-  textEl.textContent = text;
-  bubble.appendChild(textEl);
-
-  const meta = document.createElement('div');
-  meta.className = 'message-meta';
-  meta.textContent = formatTime(timestamp || Date.now());
-  bubble.appendChild(meta);
-
-  wrap.appendChild(bubble);
-  $('messages').appendChild(wrap);
-  $('messages').scrollTop = $('messages').scrollHeight;
+  return new Intl.DateTimeFormat(
+    'ru-RU',
+    {
+      hour: '2-digit',
+      minute: '2-digit'
+    }
+  ).format(timestamp);
 }
 
-async function processIncomingMessage(payload) {
-  if (!payload?.U || !payload?.V || !payload?.nonce || !payload?.ciphertext) {
-    throw new Error('Получен повреждённый пакет сообщения');
+function addMessage(
+  text,
+  {
+    outgoing,
+    sender,
+    timestamp,
+    id
+  }
+) {
+  const empty =
+    $('empty-state');
+
+  if (empty) {
+    empty.remove();
   }
 
-  const K = NCRLWE.decapsulate(privateKey, { U: payload.U, V: payload.V });
-  const aesKey = await deriveAesKey(K);
-  const plaintext = await decryptMessage(aesKey, payload.nonce, payload.ciphertext);
+  const wrap =
+    document.createElement('div');
 
-  addMessage(plaintext, {
-    outgoing: false,
-    sender: payload.sender || 'Неизвестный',
-    timestamp: payload.createdAt
-  });
+  wrap.className =
+    `message-wrap ${
+      outgoing
+        ? 'outgoing'
+        : 'incoming'
+    }`;
+
+  if (id) {
+    wrap.dataset.messageId = id;
+  }
+
+  const bubble =
+    document.createElement('div');
+
+  bubble.className =
+    'message';
+
+  if (
+    !outgoing &&
+    sender
+  ) {
+    const senderEl =
+      document.createElement(
+        'div'
+      );
+
+    senderEl.className =
+      'message-sender';
+
+    senderEl.textContent =
+      sender;
+
+    bubble.appendChild(
+      senderEl
+    );
+  }
+
+  const textEl =
+    document.createElement(
+      'div'
+    );
+
+  textEl.textContent =
+    text;
+
+  bubble.appendChild(
+    textEl
+  );
+
+  const meta =
+    document.createElement(
+      'div'
+    );
+
+  meta.className =
+    'message-meta';
+
+  meta.textContent =
+    formatTime(
+      timestamp ||
+      Date.now()
+    );
+
+  bubble.appendChild(
+    meta
+  );
+
+  wrap.appendChild(
+    bubble
+  );
+
+  $('messages')
+    .appendChild(wrap);
+
+  $('messages').scrollTop =
+    $('messages').scrollHeight;
+}
+
+async function processIncomingMessage(
+  payload
+) {
+  if (
+    !payload?.id ||
+    !payload?.U ||
+    !payload?.V ||
+    !payload?.nonce ||
+    !payload?.ciphertext
+  ) {
+    throw new Error(
+      'Получен повреждённый пакет сообщения'
+    );
+  }
+
+  /*
+   * Дедупликация.
+   *
+   * Одно сообщение может прийти повторно,
+   * если ACK не успел пройти.
+   */
+  if (
+    seenMessageIds.has(
+      payload.id
+    )
+  ) {
+    return;
+  }
+
+  const K =
+    NCRLWE.decapsulate(
+      privateKey,
+      {
+        U: payload.U,
+        V: payload.V
+      }
+    );
+
+  const aesKey =
+    await deriveAesKey(K);
+
+  const plaintext =
+    await decryptMessage(
+      aesKey,
+      payload.nonce,
+      payload.ciphertext
+    );
+
+  /*
+   * Сначала показываем только успешно
+   * расшифрованное сообщение.
+   */
+  addMessage(
+    plaintext,
+    {
+      outgoing: false,
+      sender:
+        payload.sender ||
+        'Неизвестный',
+      timestamp:
+        payload.createdAt,
+      id: payload.id
+    }
+  );
+
+  /*
+   * Только после успешной расшифровки
+   * подтверждаем получение серверу.
+   */
+  try {
+    await apiAck(
+      payload.id
+    );
+
+    seenMessageIds.add(
+      payload.id
+    );
+  } catch (error) {
+    /*
+     * ACK не прошёл.
+     *
+     * Сообщение останется в Redis.
+     * При следующем polling оно придёт снова.
+     *
+     * Это лучше, чем потерять сообщение.
+     */
+    console.warn(
+      'ACK error:',
+      error
+    );
+
+    /*
+     * Добавляем ID в Set даже если ACK
+     * не прошёл, чтобы не показать дубль
+     * в рамках текущей страницы.
+     */
+    seenMessageIds.add(
+      payload.id
+    );
+
+    throw new Error(
+      'Сообщение расшифровано, но подтверждение не отправлено'
+    );
+  }
 }
 
 async function checkMessages() {
-  if (!username || pollingInProgress) return;
+  if (
+    !username ||
+    pollingInProgress
+  ) {
+    return;
+  }
 
   pollingInProgress = true;
+
   try {
-    const data = await apiGetMessages();
-    const messages = Array.isArray(data.messages) ? data.messages : [];
+    const data =
+      await apiGetMessages();
+
+    const messages =
+      Array.isArray(
+        data.messages
+      )
+        ? data.messages
+        : [];
 
     let failed = 0;
-    for (const payload of messages) {
+
+    for (
+      const payload
+      of messages
+    ) {
       try {
-        await processIncomingMessage(payload);
-      } catch {
+        await processIncomingMessage(
+          payload
+        );
+      } catch (error) {
         failed++;
+
+        console.error(
+          'Message processing error:',
+          error,
+          payload
+        );
       }
     }
 
-    setStatus(failed ? `Не удалось расшифровать: ${failed}` : 'Подключено', failed > 0);
+    if (failed > 0) {
+      setStatus(
+        `Не удалось обработать: ${failed}`,
+        true
+      );
+    } else {
+      setStatus(
+        messages.length > 0
+          ? `Получено сообщений: ${messages.length}`
+          : 'Подключено'
+      );
+    }
   } catch (error) {
-    setStatus(`Ошибка связи: ${error.message}`, true);
+    console.error(
+      'Polling error:',
+      error
+    );
+
+    setStatus(
+      `Ошибка связи: ${error.message}`,
+      true
+    );
   } finally {
-    pollingInProgress = false;
+    pollingInProgress =
+      false;
+
     if (username) {
-      clearTimeout(pollingTimer);
-      pollingTimer = setTimeout(checkMessages, 3000);
+      clearTimeout(
+        pollingTimer
+      );
+
+      pollingTimer =
+        setTimeout(
+          checkMessages,
+          3000
+        );
     }
   }
 }
 
 async function sendMessage() {
-  if (!username) return;
+  if (!username) {
+    return;
+  }
 
-  const recipient = $('recipient-input').value.trim();
-  const message = $('message-input').value.trim();
-  if (!recipient || !message) return;
+  const recipient =
+    $('recipient-input')
+      .value
+      .trim();
 
-  $('send-btn').disabled = true;
-  setStatus('Шифрование и отправка…');
+  const message =
+    $('message-input')
+      .value
+      .trim();
+
+  if (
+    !recipient ||
+    !message
+  ) {
+    return;
+  }
+
+  $('send-btn')
+    .disabled = true;
+
+  setStatus(
+    'Шифрование и отправка…'
+  );
 
   try {
-    const recipientPub = await apiGetPublicKey(recipient);
-    const { ciphertext, K } = NCRLWE.encapsulate(recipientPub);
-    const aesKey = await deriveAesKey(K);
-    const encrypted = await encryptMessage(aesKey, message);
+    const recipientPub =
+      await apiGetPublicKey(
+        recipient
+      );
 
-    await apiSend(recipient, {
+    const {
+      ciphertext,
+      K
+    } =
+      NCRLWE.encapsulate(
+        recipientPub
+      );
+
+    const aesKey =
+      await deriveAesKey(K);
+
+    const encrypted =
+      await encryptMessage(
+        aesKey,
+        message
+      );
+
+    const payload = {
       U: ciphertext.U,
       V: ciphertext.V,
       nonce: encrypted.nonce,
-      ciphertext: encrypted.ciphertext
-    });
+      ciphertext:
+        encrypted.ciphertext
+    };
 
-    addMessage(message, { outgoing: true, timestamp: Date.now() });
-    $('message-input').value = '';
+    await apiSend(
+      recipient,
+      payload
+    );
+
+    addMessage(
+      message,
+      {
+        outgoing: true,
+        sender: username,
+        timestamp: Date.now()
+      }
+    );
+
+    $('message-input')
+      .value = '';
+
     autoGrowTextarea();
-    setStatus(`Отправлено пользователю ${recipient}`);
+
+    setStatus(
+      `Отправлено пользователю ${recipient}`
+    );
   } catch (error) {
-    setStatus(`Ошибка отправки: ${error.message}`, true);
+    console.error(
+      'Send error:',
+      error
+    );
+
+    setStatus(
+      `Ошибка отправки: ${error.message}`,
+      true
+    );
   } finally {
-    $('send-btn').disabled = false;
-    $('message-input').focus();
+    $('send-btn')
+      .disabled = false;
+
+    $('message-input')
+      .focus();
   }
 }
 
 function autoGrowTextarea() {
-  const textarea = $('message-input');
-  textarea.style.height = 'auto';
-  textarea.style.height = `${Math.min(textarea.scrollHeight, 140)}px`;
+  const textarea =
+    $('message-input');
+
+  textarea.style.height =
+    'auto';
+
+  textarea.style.height =
+    `${Math.min(
+      textarea.scrollHeight,
+      140
+    )}px`;
 }
 
-$('login-form').addEventListener('submit', async (event) => {
-  event.preventDefault();
-  if (authInProgress) return;
+$('login-form')
+  .addEventListener(
+    'submit',
+    async (event) => {
+      event.preventDefault();
 
-  const name = $('username-input').value.trim();
-  const password = $('password-input').value;
-  $('login-error').textContent = '';
+      if (authInProgress) {
+        return;
+      }
 
-  if (!name || !password) return;
+      const name =
+        $('username-input')
+          .value
+          .trim();
 
-  authInProgress = true;
-  $('login-btn').disabled = true;
-  $('login-btn').textContent = 'Подключение…';
+      const password =
+        $('password-input')
+          .value;
 
-  try {
-    loadOrGenerateKeys(name);
-    await apiAuth(name, password, publicKey);
+      $('login-error')
+        .textContent = '';
 
-    username = name;
-    localStorage.setItem('ncrlwe_last_username', name);
-    showChat(name);
-    await checkMessages();
-  } catch (error) {
-    $('login-error').textContent = error.message;
-  } finally {
-    authInProgress = false;
-    $('login-btn').disabled = false;
-    $('login-btn').textContent = 'Войти / создать аккаунт';
-  }
-});
+      if (
+        !name ||
+        !password
+      ) {
+        return;
+      }
 
-$('logout-btn').addEventListener('click', async () => {
-  username = null;
-  clearTimeout(pollingTimer);
-  pollingTimer = null;
-  pollingInProgress = false;
-  privateKey = null;
-  publicKey = null;
+      authInProgress = true;
 
-  try { await apiLogout(); } catch {}
-  $('messages').innerHTML = `
-    <div id="empty-state" class="empty-state">
-      <div class="empty-icon">✉</div>
-      <h2>Сообщений пока нет</h2>
-      <p>Введите имя получателя ниже и отправьте первое сообщение.</p>
-    </div>`;
-  $('login-error').textContent = '';
-  showLogin();
-});
+      $('login-btn')
+        .disabled = true;
 
-$('composer').addEventListener('submit', (event) => {
-  event.preventDefault();
-  sendMessage();
-});
+      $('login-btn')
+        .textContent =
+        'Подключение…';
 
-$('message-input').addEventListener('input', autoGrowTextarea);
-$('message-input').addEventListener('keydown', (event) => {
-  if (event.key === 'Enter' && !event.shiftKey) {
-    event.preventDefault();
-    sendMessage();
-  }
-});
+      try {
+        loadOrGenerateKeys(
+          name
+        );
 
-const lastUsername = localStorage.getItem('ncrlwe_last_username');
-if (lastUsername) $('username-input').value = lastUsername;
+        await apiAuth(
+          name,
+          password,
+          publicKey
+        );
 
-if ('serviceWorker' in navigator) {
-  navigator.serviceWorker.register('/sw.js').catch(() => {});
+        username = name;
+
+        localStorage.setItem(
+          'ncrlwe_last_username',
+          name
+        );
+
+        seenMessageIds.clear();
+
+        showChat(name);
+
+        await checkMessages();
+      } catch (error) {
+        console.error(
+          'Login error:',
+          error
+        );
+
+        $('login-error')
+          .textContent =
+          error.message;
+      } finally {
+        authInProgress = false;
+
+        $('login-btn')
+          .disabled = false;
+
+        $('login-btn')
+          .textContent =
+          'Войти / создать аккаунт';
+      }
+    }
+  );
+
+$('logout-btn')
+  .addEventListener(
+    'click',
+    () => {
+      username = null;
+
+      clearTimeout(
+        pollingTimer
+      );
+
+      pollingTimer = null;
+
+      privateKey = null;
+      publicKey = null;
+
+      seenMessageIds.clear();
+
+      $('messages')
+        .innerHTML = `
+          <div id="empty-state" class="empty-state">
+            <div class="empty-icon">✉</div>
+            <h2>Сообщений пока нет</h2>
+            <p>Введите имя получателя ниже и отправьте первое сообщение.</p>
+          </div>
+        `;
+
+      $('login-error')
+        .textContent = '';
+
+      showLogin();
+    }
+  );
+
+$('composer')
+  .addEventListener(
+    'submit',
+    (event) => {
+      event.preventDefault();
+      sendMessage();
+    }
+  );
+
+$('message-input')
+  .addEventListener(
+    'input',
+    autoGrowTextarea
+  );
+
+$('message-input')
+  .addEventListener(
+    'keydown',
+    (event) => {
+      if (
+        event.key === 'Enter' &&
+        !event.shiftKey
+      ) {
+        event.preventDefault();
+        sendMessage();
+      }
+    }
+  );
+
+const lastUsername =
+  localStorage.getItem(
+    'ncrlwe_last_username'
+  );
+
+if (lastUsername) {
+  $('username-input')
+    .value = lastUsername;
+}
+
+if (
+  'serviceWorker' in navigator
+) {
+  navigator.serviceWorker
+    .register('/sw.js')
+    .catch(
+      (error) =>
+        console.warn(
+          'SW:',
+          error
+        )
+    );
 }

@@ -67,7 +67,6 @@ export default async function handler(req, res) {
         const legacy = sha256(password);
         if (legacy === user.passwordHash.slice(7)) {
           const upgraded = await hash(password, {
-            algorithm: 'argon2id',
             memoryCost: 19456,
             timeCost: 2,
             parallelism: 1

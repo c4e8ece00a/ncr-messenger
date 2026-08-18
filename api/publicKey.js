@@ -1,29 +1,72 @@
 import { getRedis } from '../lib/redis.js';
-import { normalizeUsername, validUsername, requireSession, noStore, securityHeaders, rateLimit } from '../lib/security.js';
+
+import {
+  noStore,
+  securityHeaders,
+  requireSession,
+  requireSameOrigin,
+  normalizeUsername,
+  validUsername
+} from '../lib/security.js';
 
 export default async function handler(req, res) {
   securityHeaders(res);
   noStore(res);
 
-  if (req.method !== 'GET') return res.status(405).json({ error: 'Method not allowed' });
+  if (req.method !== 'GET') {
+    return res.status(405).json({
+      error: 'Method not allowed'
+    });
+  }
+
+  if (!requireSameOrigin(req, res)) {
+    return;
+  }
+
+  const username = normalizeUsername(
+    req.query?.username
+  );
+
+  if (!validUsername(username)) {
+    return res.status(400).json({
+      error: 'Некорректное имя пользователя'
+    });
+  }
 
   try {
     const redis = getRedis();
-    const session = await requireSession(req, res, redis);
-    if (!session) return;
 
-    const username = normalizeUsername(req.query?.username);
-    if (!validUsername(username)) return res.status(400).json({ error: 'Некорректное имя пользователя' });
+    const session = await requireSession(
+      req,
+      res,
+      redis
+    );
 
-    const rl = await rateLimit(redis, `pubkey:${session.username}`, 60, 60);
-    if (!rl.allowed) return res.status(429).json({ error: 'Слишком много запросов' });
+    if (!session) {
+      return;
+    }
 
-    const publicKey = await redis.get(`publicKey:${username}`);
-    if (!publicKey) return res.status(404).json({ error: 'Пользователь не найден' });
+    const publicKey = await redis.get(
+      `publicKey:${username}`
+    );
 
-    return res.status(200).json({ publicKey });
+    if (!publicKey) {
+      return res.status(404).json({
+        error: 'Пользователь не найден'
+      });
+    }
+
+    return res.status(200).json({
+      publicKey
+    });
   } catch (error) {
-    console.error('GET /api/publicKey:', error?.message || error);
-    return res.status(500).json({ error: 'Ошибка базы данных' });
+    console.error(
+      'GET /api/publicKey:',
+      error?.message || error
+    );
+
+    return res.status(500).json({
+      error: 'Ошибка получения публичного ключа'
+    });
   }
 }

@@ -5,14 +5,21 @@ let publicKey = null;
 let pollingTimer = null;
 let pollingInProgress = false;
 let authInProgress = false;
+let pushSubscription = null;
 
-const seenMessageIds = new Set();
+const POLL_INTERVAL = 2500;
 
 const $ = (id) => document.getElementById(id);
 
 function keyStorageName(name) {
   return `ncrlwe_keys:${name}`;
 }
+
+/*
+ * =========================
+ * KEYS
+ * =========================
+ */
 
 function loadOrGenerateKeys(name) {
   const storageKey = keyStorageName(name);
@@ -49,13 +56,20 @@ function loadOrGenerateKeys(name) {
   );
 }
 
+/*
+ * =========================
+ * AES
+ * =========================
+ */
+
 async function deriveAesKey(K) {
   const bytes = NCRLWE.matrixToBytes(K);
 
-  const hash = await crypto.subtle.digest(
-    'SHA-256',
-    bytes
-  );
+  const hash =
+    await crypto.subtle.digest(
+      'SHA-256',
+      bytes
+    );
 
   return crypto.subtle.importKey(
     'raw',
@@ -64,10 +78,7 @@ async function deriveAesKey(K) {
       name: 'AES-GCM'
     },
     false,
-    [
-      'encrypt',
-      'decrypt'
-    ]
+    ['encrypt', 'decrypt']
   );
 }
 
@@ -123,6 +134,12 @@ async function decryptMessage(
   );
 }
 
+/*
+ * =========================
+ * API
+ * =========================
+ */
+
 async function readJsonResponse(res) {
   const text = await res.text();
 
@@ -132,9 +149,7 @@ async function readJsonResponse(res) {
     data = text
       ? JSON.parse(text)
       : {};
-  } catch {
-    // Некорректный JSON.
-  }
+  } catch {}
 
   if (!res.ok) {
     throw new Error(
@@ -156,6 +171,7 @@ async function apiAuth(
     {
       method: 'POST',
       cache: 'no-store',
+      credentials: 'same-origin',
       headers: {
         'Content-Type':
           'application/json'
@@ -179,7 +195,8 @@ async function apiGetPublicKey(name) {
     url,
     {
       method: 'GET',
-      cache: 'no-store'
+      cache: 'no-store',
+      credentials: 'same-origin'
     }
   );
 
@@ -198,6 +215,7 @@ async function apiSend(
     {
       method: 'POST',
       cache: 'no-store',
+      credentials: 'same-origin',
       headers: {
         'Content-Type':
           'application/json'
@@ -220,31 +238,59 @@ async function apiGetMessages() {
     url,
     {
       method: 'GET',
-      cache: 'no-store'
+      cache: 'no-store',
+      credentials: 'same-origin'
     }
   );
 
   return readJsonResponse(res);
 }
 
-async function apiAck(messageId) {
+async function apiPushSubscribe(subscription) {
   const res = await fetch(
-    '/api/ack',
+    '/api/push/subscribe',
     {
       method: 'POST',
       cache: 'no-store',
+      credentials: 'same-origin',
       headers: {
         'Content-Type':
           'application/json'
       },
       body: JSON.stringify({
-        messageId
+        subscription
       })
     }
   );
 
   return readJsonResponse(res);
 }
+
+async function apiPushUnsubscribe(subscription) {
+  const res = await fetch(
+    '/api/push/unsubscribe',
+    {
+      method: 'POST',
+      cache: 'no-store',
+      credentials: 'same-origin',
+      headers: {
+        'Content-Type':
+          'application/json'
+      },
+      body: JSON.stringify({
+        subscription
+      })
+    }
+  );
+
+  return readJsonResponse(res);
+}
+
+/*
+ * =========================
+ * UI
+ * =========================
+ */
 
 function setStatus(
   text,
@@ -278,6 +324,8 @@ function showChat(name) {
     .classList
     .remove('hidden');
 
+  updatePushUI();
+
   setStatus('Подключено');
 }
 
@@ -302,7 +350,9 @@ function formatTime(timestamp) {
       hour: '2-digit',
       minute: '2-digit'
     }
-  ).format(timestamp);
+  ).format(
+    new Date(timestamp)
+  );
 }
 
 function addMessage(
@@ -310,8 +360,7 @@ function addMessage(
   {
     outgoing,
     sender,
-    timestamp,
-    id
+    timestamp
   }
 ) {
   const empty =
@@ -331,20 +380,13 @@ function addMessage(
         : 'incoming'
     }`;
 
-  if (id) {
-    wrap.dataset.messageId = id;
-  }
-
   const bubble =
     document.createElement('div');
 
   bubble.className =
     'message';
 
-  if (
-    !outgoing &&
-    sender
-  ) {
+  if (!outgoing && sender) {
     const senderEl =
       document.createElement(
         'div'
@@ -396,17 +438,24 @@ function addMessage(
   );
 
   $('messages')
-    .appendChild(wrap);
+    .appendChild(
+      wrap
+    );
 
   $('messages').scrollTop =
     $('messages').scrollHeight;
 }
 
+/*
+ * =========================
+ * MESSAGE DECRYPTION
+ * =========================
+ */
+
 async function processIncomingMessage(
   payload
 ) {
   if (
-    !payload?.id ||
     !payload?.U ||
     !payload?.V ||
     !payload?.nonce ||
@@ -415,20 +464,6 @@ async function processIncomingMessage(
     throw new Error(
       'Получен повреждённый пакет сообщения'
     );
-  }
-
-  /*
-   * Дедупликация.
-   *
-   * Одно сообщение может прийти повторно,
-   * если ACK не успел пройти.
-   */
-  if (
-    seenMessageIds.has(
-      payload.id
-    )
-  ) {
-    return;
   }
 
   const K =
@@ -450,10 +485,6 @@ async function processIncomingMessage(
       payload.ciphertext
     );
 
-  /*
-   * Сначала показываем только успешно
-   * расшифрованное сообщение.
-   */
   addMessage(
     plaintext,
     {
@@ -462,51 +493,16 @@ async function processIncomingMessage(
         payload.sender ||
         'Неизвестный',
       timestamp:
-        payload.createdAt,
-      id: payload.id
+        payload.createdAt
     }
   );
-
-  /*
-   * Только после успешной расшифровки
-   * подтверждаем получение серверу.
-   */
-  try {
-    await apiAck(
-      payload.id
-    );
-
-    seenMessageIds.add(
-      payload.id
-    );
-  } catch (error) {
-    /*
-     * ACK не прошёл.
-     *
-     * Сообщение останется в Redis.
-     * При следующем polling оно придёт снова.
-     *
-     * Это лучше, чем потерять сообщение.
-     */
-    console.warn(
-      'ACK error:',
-      error
-    );
-
-    /*
-     * Добавляем ID в Set даже если ACK
-     * не прошёл, чтобы не показать дубль
-     * в рамках текущей страницы.
-     */
-    seenMessageIds.add(
-      payload.id
-    );
-
-    throw new Error(
-      'Сообщение расшифровано, но подтверждение не отправлено'
-    );
-  }
 }
+
+/*
+ * =========================
+ * POLLING
+ * =========================
+ */
 
 async function checkMessages() {
   if (
@@ -532,8 +528,7 @@ async function checkMessages() {
     let failed = 0;
 
     for (
-      const payload
-      of messages
+      const payload of messages
     ) {
       try {
         await processIncomingMessage(
@@ -543,24 +538,33 @@ async function checkMessages() {
         failed++;
 
         console.error(
-          'Message processing error:',
+          'Decryption error:',
           error,
           payload
         );
       }
     }
 
-    if (failed > 0) {
+    if (failed) {
       setStatus(
-        `Не удалось обработать: ${failed}`,
+        `Не удалось расшифровать: ${failed}`,
         true
       );
     } else {
       setStatus(
-        messages.length > 0
-          ? `Получено сообщений: ${messages.length}`
+        messages.length
+          ? 'Новые сообщения получены'
           : 'Подключено'
       );
+    }
+
+    if (
+      messages.length &&
+      'clearAppBadge' in navigator
+    ) {
+      try {
+        await navigator.clearAppBadge();
+      } catch {}
     }
   } catch (error) {
     console.error(
@@ -573,8 +577,7 @@ async function checkMessages() {
       true
     );
   } finally {
-    pollingInProgress =
-      false;
+    pollingInProgress = false;
 
     if (username) {
       clearTimeout(
@@ -584,11 +587,332 @@ async function checkMessages() {
       pollingTimer =
         setTimeout(
           checkMessages,
-          3000
+          POLL_INTERVAL
         );
     }
   }
 }
+
+/*
+ * =========================
+ * PUSH
+ * =========================
+ */
+
+function isStandalone() {
+  return (
+    window.matchMedia(
+      '(display-mode: standalone)'
+    ).matches ||
+    window.navigator.standalone === true
+  );
+}
+
+function pushSupported() {
+  return (
+    'serviceWorker' in navigator &&
+    'PushManager' in window &&
+    'Notification' in window
+  );
+}
+
+function setPushStatus(
+  text,
+  type = ''
+) {
+  const element =
+    $('push-status');
+
+  if (!element) {
+    return;
+  }
+
+  element.textContent =
+    text || '';
+
+  element.className =
+    `push-status ${type}`;
+}
+
+async function getServiceWorkerRegistration() {
+  return navigator.serviceWorker.ready;
+}
+
+function urlBase64ToUint8Array(
+  base64String
+) {
+  const padding =
+    '='.repeat(
+      (4 -
+        (base64String.length %
+          4)) %
+        4
+    );
+
+  const base64 =
+    (
+      base64String +
+      padding
+    )
+      .replace(
+        /-/g,
+        '+'
+      )
+      .replace(
+        /_/g,
+        '/'
+      );
+
+  const rawData =
+    window.atob(base64);
+
+  const outputArray =
+    new Uint8Array(
+      rawData.length
+    );
+
+  for (
+    let i = 0;
+    i < rawData.length;
+    i++
+  ) {
+    outputArray[i] =
+      rawData.charCodeAt(i);
+  }
+
+  return outputArray;
+}
+
+async function getVapidPublicKey() {
+  const res =
+    await fetch(
+      '/api/push/config',
+      {
+        cache: 'no-store',
+        credentials:
+          'same-origin'
+      }
+    );
+
+  const data =
+    await readJsonResponse(res);
+
+  return data.publicKey;
+}
+
+async function enablePushNotifications() {
+  if (!pushSupported()) {
+    setPushStatus(
+      'Этот браузер не поддерживает Push',
+      'error'
+    );
+
+    return;
+  }
+
+  if (
+    /iPhone|iPad|iPod/i.test(
+      navigator.userAgent
+    ) &&
+    !isStandalone()
+  ) {
+    setPushStatus(
+      'Сначала добавьте NCR Messenger на экран «Домой»',
+      'warning'
+    );
+
+    return;
+  }
+
+  try {
+    setPushStatus(
+      'Подготовка уведомлений…'
+    );
+
+    const permission =
+      await Notification.requestPermission();
+
+    if (
+      permission !== 'granted'
+    ) {
+      setPushStatus(
+        'Уведомления запрещены',
+        'error'
+      );
+
+      return;
+    }
+
+    const registration =
+      await getServiceWorkerRegistration();
+
+    let subscription =
+      await registration.pushManager.getSubscription();
+
+    if (!subscription) {
+      const vapidPublicKey =
+        await getVapidPublicKey();
+
+      subscription =
+        await registration.pushManager.subscribe(
+          {
+            userVisibleOnly: true,
+            applicationServerKey:
+              urlBase64ToUint8Array(
+                vapidPublicKey
+              )
+          }
+        );
+    }
+
+    const subscriptionJSON =
+      subscription.toJSON();
+
+    await apiPushSubscribe(
+      subscriptionJSON
+    );
+
+    pushSubscription =
+      subscription;
+
+    updatePushUI();
+
+    setPushStatus(
+      'Уведомления включены',
+      'success'
+    );
+  } catch (error) {
+    console.error(
+      'Push subscription error:',
+      error
+    );
+
+    setPushStatus(
+      `Ошибка уведомлений: ${error.message}`,
+      'error'
+    );
+  }
+}
+
+async function disablePushNotifications() {
+  if (!pushSupported()) {
+    return;
+  }
+
+  try {
+    const registration =
+      await getServiceWorkerRegistration();
+
+    const subscription =
+      await registration.pushManager.getSubscription();
+
+    if (subscription) {
+      try {
+        await apiPushUnsubscribe(
+          subscription.toJSON()
+        );
+      } catch (error) {
+        console.warn(
+          'Unable to unregister push:',
+          error
+        );
+      }
+
+      await subscription.unsubscribe();
+    }
+
+    pushSubscription = null;
+
+    updatePushUI();
+
+    setPushStatus(
+      'Уведомления выключены'
+    );
+  } catch (error) {
+    console.error(
+      'Push unsubscribe error:',
+      error
+    );
+
+    setPushStatus(
+      `Ошибка: ${error.message}`,
+      'error'
+    );
+  }
+}
+
+async function updatePushUI() {
+  const button =
+    $('push-btn');
+
+  if (!button) {
+    return;
+  }
+
+  if (!pushSupported()) {
+    button.classList.add(
+      'hidden'
+    );
+
+    return;
+  }
+
+  if (
+    /iPhone|iPad|iPod/i.test(
+      navigator.userAgent
+    ) &&
+    !isStandalone()
+  ) {
+    button.textContent =
+      '📱 Добавить на экран «Домой»';
+
+    button.disabled = true;
+
+    return;
+  }
+
+  try {
+    const registration =
+      await getServiceWorkerRegistration();
+
+    const subscription =
+      await registration.pushManager.getSubscription();
+
+    pushSubscription =
+      subscription;
+
+    if (
+      subscription &&
+      Notification.permission ===
+        'granted'
+    ) {
+      button.textContent =
+        '🔔 Уведомления включены';
+
+      button.classList.add(
+        'enabled'
+      );
+
+      return;
+    }
+
+    button.textContent =
+      '🔔 Включить уведомления';
+
+    button.classList.remove(
+      'enabled'
+    );
+  } catch {
+    button.textContent =
+      '🔔 Включить уведомления';
+  }
+}
+
+/*
+ * =========================
+ * SEND
+ * =========================
+ */
 
 async function sendMessage() {
   if (!username) {
@@ -612,8 +936,8 @@ async function sendMessage() {
     return;
   }
 
-  $('send-btn')
-    .disabled = true;
+  $('send-btn').disabled =
+    true;
 
   setStatus(
     'Шифрование и отправка…'
@@ -659,7 +983,6 @@ async function sendMessage() {
       message,
       {
         outgoing: true,
-        sender: username,
         timestamp: Date.now()
       }
     );
@@ -683,8 +1006,8 @@ async function sendMessage() {
       true
     );
   } finally {
-    $('send-btn')
-      .disabled = false;
+    $('send-btn').disabled =
+      false;
 
     $('message-input')
       .focus();
@@ -704,6 +1027,53 @@ function autoGrowTextarea() {
       140
     )}px`;
 }
+
+/*
+ * =========================
+ * SERVICE WORKER EVENTS
+ * =========================
+ */
+
+function registerServiceWorkerMessages() {
+  if (
+    !('serviceWorker' in navigator)
+  ) {
+    return;
+  }
+
+  navigator.serviceWorker.addEventListener(
+    'message',
+    async (event) => {
+      if (
+        event.data?.type ===
+        'push-message'
+      ) {
+        /*
+         * Если приложение открыто,
+         * сразу забираем сообщение.
+         */
+        if (username) {
+          await checkMessages();
+        }
+      }
+
+      if (
+        event.data?.type ===
+        'notification-click'
+      ) {
+        if (username) {
+          await checkMessages();
+        }
+      }
+    }
+  );
+}
+
+/*
+ * =========================
+ * LOGIN
+ * =========================
+ */
 
 $('login-form')
   .addEventListener(
@@ -734,10 +1104,11 @@ $('login-form')
         return;
       }
 
-      authInProgress = true;
+      authInProgress =
+        true;
 
-      $('login-btn')
-        .disabled = true;
+      $('login-btn').disabled =
+        true;
 
       $('login-btn')
         .textContent =
@@ -761,8 +1132,6 @@ $('login-form')
           name
         );
 
-        seenMessageIds.clear();
-
         showChat(name);
 
         await checkMessages();
@@ -776,7 +1145,8 @@ $('login-form')
           .textContent =
           error.message;
       } finally {
-        authInProgress = false;
+        authInProgress =
+          false;
 
         $('login-btn')
           .disabled = false;
@@ -788,6 +1158,12 @@ $('login-form')
     }
   );
 
+/*
+ * =========================
+ * LOGOUT
+ * =========================
+ */
+
 $('logout-btn')
   .addEventListener(
     'click',
@@ -798,21 +1174,25 @@ $('logout-btn')
         pollingTimer
       );
 
-      pollingTimer = null;
+      pollingTimer =
+        null;
 
-      privateKey = null;
-      publicKey = null;
+      privateKey =
+        null;
 
-      seenMessageIds.clear();
+      publicKey =
+        null;
 
-      $('messages')
-        .innerHTML = `
-          <div id="empty-state" class="empty-state">
-            <div class="empty-icon">✉</div>
-            <h2>Сообщений пока нет</h2>
-            <p>Введите имя получателя ниже и отправьте первое сообщение.</p>
-          </div>
-        `;
+      pushSubscription =
+        null;
+
+      $('messages').innerHTML = `
+        <div id="empty-state" class="empty-state">
+          <div class="empty-icon">✉</div>
+          <h2>Сообщений пока нет</h2>
+          <p>Введите имя получателя ниже и отправьте первое сообщение.</p>
+        </div>
+      `;
 
       $('login-error')
         .textContent = '';
@@ -821,11 +1201,18 @@ $('logout-btn')
     }
   );
 
+/*
+ * =========================
+ * COMPOSER
+ * =========================
+ */
+
 $('composer')
   .addEventListener(
     'submit',
     (event) => {
       event.preventDefault();
+
       sendMessage();
     }
   );
@@ -845,10 +1232,37 @@ $('message-input')
         !event.shiftKey
       ) {
         event.preventDefault();
+
         sendMessage();
       }
     }
   );
+
+/*
+ * =========================
+ * PUSH BUTTON
+ * =========================
+ */
+
+$('push-btn')
+  .addEventListener(
+    'click',
+    async () => {
+      if (
+        pushSubscription
+      ) {
+        await disablePushNotifications();
+      } else {
+        await enablePushNotifications();
+      }
+    }
+  );
+
+/*
+ * =========================
+ * STARTUP
+ * =========================
+ */
 
 const lastUsername =
   localStorage.getItem(
@@ -857,19 +1271,35 @@ const lastUsername =
 
 if (lastUsername) {
   $('username-input')
-    .value = lastUsername;
+    .value =
+    lastUsername;
 }
+
+registerServiceWorkerMessages();
 
 if (
   'serviceWorker' in navigator
 ) {
   navigator.serviceWorker
-    .register('/sw.js')
+    .register(
+      '/sw.js',
+      {
+        updateViaCache: 'none'
+      }
+    )
+    .then(
+      (registration) => {
+        registration.update()
+          .catch(() => {});
+      }
+    )
     .catch(
-      (error) =>
+      (error) => {
         console.warn(
           'SW:',
           error
-        )
+        );
+      }
     );
 }
+

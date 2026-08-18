@@ -5,7 +5,9 @@
 
   <meta
     name="viewport"
-    content="width=device-width, initial-scale=1, viewport-fit=cover"
+    content="width=device-width,
+             initial-scale=1,
+             viewport-fit=cover"
   >
 
   <meta
@@ -33,8 +35,6 @@
     href="/icon-192.png"
   >
 
-  <title>NCR Messenger</title>
-
   <link
     rel="manifest"
     href="/manifest.json"
@@ -44,31 +44,26 @@
     rel="stylesheet"
     href="/style.css"
   >
+
+  <title>NCR Messenger</title>
 </head>
 
 <body>
 
 <div id="app">
 
-  <!-- LOGIN -->
-
   <section
     id="login-screen"
     class="screen login-screen"
   >
-
     <div class="login-card">
 
-      <div class="logo">
-        N
-      </div>
+      <div class="logo">N</div>
 
-      <h1>
-        NCR Messenger
-      </h1>
+      <h1>NCR Messenger</h1>
 
       <p class="muted">
-        Простой зашифрованный чат
+        Зашифрованный чат
       </p>
 
       <form
@@ -77,9 +72,7 @@
       >
 
         <label>
-          <span>
-            Имя пользователя
-          </span>
+          <span>Имя пользователя</span>
 
           <input
             id="username-input"
@@ -96,9 +89,7 @@
         </label>
 
         <label>
-          <span>
-            Пароль
-          </span>
+          <span>Пароль</span>
 
           <input
             id="password-input"
@@ -129,17 +120,13 @@
       ></p>
 
       <p class="hint">
-        Ключ шифрования хранится в этом браузере.
-        Не очищайте данные сайта, если хотите
-        сохранить доступ к старым сообщениям.
+        Приватный ключ шифрования хранится
+        в этом браузере.
       </p>
 
     </div>
-
   </section>
 
-
-  <!-- CHAT -->
 
   <section
     id="chat-screen"
@@ -158,36 +145,35 @@
         </div>
 
         <div>
-
-          <strong>
-            NCR Messenger
-          </strong>
+          <strong>NCR Messenger</strong>
 
           <div class="online">
-
             <span></span>
 
             <span id="current-user"></span>
-
           </div>
-
         </div>
 
       </div>
 
+
       <div class="header-actions">
 
         <button
-          id="push-btn"
-          class="push-button"
+          id="notification-btn"
+          class="header-button"
           type="button"
+          aria-label="Уведомления"
+          title="Уведомления"
         >
-          🔔 Включить уведомления
+          <span id="notification-icon">
+            🔔
+          </span>
         </button>
 
         <button
           id="logout-btn"
-          class="icon-button"
+          class="header-button logout"
           type="button"
         >
           Выйти
@@ -231,14 +217,9 @@
       id="status-bar"
       class="status-bar"
       aria-live="polite"
-    ></div>
-
-
-    <div
-      id="push-status"
-      class="push-status"
-      aria-live="polite"
-    ></div>
+    >
+      Подключено
+    </div>
 
 
     <form
@@ -251,7 +232,7 @@
         <label
           for="recipient-input"
         >
-          Получатель
+          Кому
         </label>
 
         <input

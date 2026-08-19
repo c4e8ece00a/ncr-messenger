@@ -1,13 +1,18 @@
-import { hash, verify } from '@node-rs/argon2';
-import { getRedis } from '../lib/redis.js';
+import {
+  hash,
+  verify
+} from '@node-rs/argon2';
+
+import {
+  getRedis
+} from '../lib/redis.js';
 
 import {
   MAX_PASSWORD_LENGTH,
   normalizeUsername,
   validUsername,
-  normalizeDeviceId,
-  validDeviceId,
   newToken,
+  newDeviceId,
   sha256,
   setSessionCookie,
   noStore,
@@ -24,68 +29,121 @@ const MIN_PASSWORD_LENGTH = 8;
 
 function genericAuthError(res) {
   return res.status(401).json({
-    error: 'Неверные учетные данные'
+    error:
+      'Неверные учетные данные'
   });
 }
 
-export default async function handler(req, res) {
+function validDeviceId(value) {
+  return (
+    typeof value === 'string' &&
+    /^[0-9a-f-]{36}$/i.test(value)
+  );
+}
+
+function validPublicKey(key) {
+  return (
+    key &&
+    typeof key === 'object' &&
+    Array.isArray(key.A) &&
+    Array.isArray(key.B)
+  );
+}
+
+export default async function handler(
+  req,
+  res
+) {
   securityHeaders(res);
   noStore(res);
 
   if (req.method !== 'POST') {
     return res.status(405).json({
-      error: 'Method not allowed'
+      error:
+        'Method not allowed'
     });
   }
 
-  if (!requireSameOrigin(req, res)) {
+  if (
+    !requireSameOrigin(
+      req,
+      res
+    )
+  ) {
     return;
   }
 
-  if (jsonBodySize(req) > 16 * 1024) {
+  if (
+    jsonBodySize(req) >
+    16 * 1024
+  ) {
     return res.status(413).json({
-      error: 'Слишком большой запрос'
+      error:
+        'Слишком большой запрос'
     });
   }
 
   try {
-    const body = req.body || {};
+    const body =
+      req.body || {};
 
     const username =
-      normalizeUsername(body.username);
+      normalizeUsername(
+        body.username
+      );
 
     const password =
-      String(body.password ?? '');
+      String(
+        body.password ?? ''
+      );
 
     const publicKey =
       body.publicKey;
 
-    const deviceId =
-      normalizeDeviceId(body.deviceId);
+    let deviceId =
+      body.deviceId;
+
+    if (
+      !validDeviceId(deviceId)
+    ) {
+      deviceId =
+        newDeviceId();
+    }
 
     if (
       !validUsername(username) ||
-      password.length < MIN_PASSWORD_LENGTH ||
-      password.length > MAX_PASSWORD_LENGTH ||
-      !validDeviceId(deviceId) ||
-      !publicKey ||
-      typeof publicKey !== 'object'
+      password.length <
+        MIN_PASSWORD_LENGTH ||
+      password.length >
+        MAX_PASSWORD_LENGTH
     ) {
       return genericAuthError(res);
     }
 
-    const redis = getRedis();
+    if (
+      !validPublicKey(publicKey)
+    ) {
+      return res.status(400).json({
+        error:
+          'Некорректный ключ устройства'
+      });
+    }
+
+    const redis =
+      getRedis();
 
     const ip =
-      req.headers['x-forwarded-for'] ||
-      'unknown';
+      req.headers[
+        'x-forwarded-for'
+      ] || 'unknown';
 
-    const rl = await rateLimit(
-      redis,
-      `login:${username}:${ip}`,
-      5,
-      300
-    );
+    const rl =
+      await rateLimit(
+        redis,
+        `login:${username}:${ip}`,
+        5,
+        300
+      );
 
     if (!rl.allowed) {
       return res.status(429).json({
@@ -98,23 +156,31 @@ export default async function handler(req, res) {
       `user:${username}`;
 
     const existing =
-      await redis.get(userKey);
+      await redis.get(
+        userKey
+      );
 
     if (!existing) {
       const passwordHash =
-        await hash(password, {
-          algorithm: 'argon2id',
-          memoryCost: 19456,
-          timeCost: 2,
-          parallelism: 1
-        });
+        await hash(
+          password,
+          {
+            algorithm:
+              'argon2id',
+            memoryCost:
+              19456,
+            timeCost: 2,
+            parallelism: 1
+          }
+        );
 
       await redis.set(
         userKey,
         JSON.stringify({
           username,
           passwordHash,
-          createdAt: Date.now()
+          createdAt:
+            Date.now()
         })
       );
     } else {
@@ -125,11 +191,14 @@ export default async function handler(req, res) {
 
       let valid = false;
 
-      if (user?.passwordHash) {
-        valid = await verify(
-          user.passwordHash,
-          password
-        );
+      if (
+        user?.passwordHash
+      ) {
+        valid =
+          await verify(
+            user.passwordHash,
+            password
+          );
       }
 
       if (
@@ -146,12 +215,17 @@ export default async function handler(req, res) {
           user.passwordHash.slice(7)
         ) {
           const upgraded =
-            await hash(password, {
-              algorithm: 'argon2id',
-              memoryCost: 19456,
-              timeCost: 2,
-              parallelism: 1
-            });
+            await hash(
+              password,
+              {
+                algorithm:
+                  'argon2id',
+                memoryCost:
+                  19456,
+                timeCost: 2,
+                parallelism: 1
+              }
+            );
 
           user.passwordHash =
             upgraded;
@@ -166,13 +240,15 @@ export default async function handler(req, res) {
       }
 
       if (!valid) {
-        return genericAuthError(res);
+        return genericAuthError(
+          res
+        );
       }
     }
 
     /*
-     * Каждый браузер / iPhone / устройство
-     * имеет собственную пару ключей.
+     * Регистрируем public key
+     * конкретного устройства.
      */
     await redis.set(
       `device:${username}:${deviceId}`,
@@ -180,8 +256,10 @@ export default async function handler(req, res) {
         username,
         deviceId,
         publicKey,
-        createdAt: Date.now(),
-        lastSeenAt: Date.now()
+        createdAt:
+          Date.now(),
+        updatedAt:
+          Date.now()
       })
     );
 
@@ -193,7 +271,8 @@ export default async function handler(req, res) {
       JSON.stringify({
         username,
         deviceId,
-        createdAt: Date.now()
+        createdAt:
+          Date.now()
       }),
       {
         ex: SESSION_TTL
@@ -214,11 +293,13 @@ export default async function handler(req, res) {
   } catch (error) {
     console.error(
       'POST /api/auth:',
-      error?.message || error
+      error?.message ||
+        error
     );
 
     return res.status(500).json({
-      error: 'Ошибка авторизации'
+      error:
+        'Ошибка авторизации'
     });
   }
 }

@@ -1,4 +1,6 @@
-import { getRedis } from '../../lib/redis.js';
+import {
+  getRedis
+} from '../../lib/redis.js';
 
 import {
   securityHeaders,
@@ -10,18 +12,23 @@ import {
   getVapidPublicKey
 } from '../../lib/push.js';
 
-export default async function handler(req, res) {
+export default async function handler(
+  req,
+  res
+) {
   securityHeaders(res);
   noStore(res);
 
   if (req.method !== 'GET') {
     return res.status(405).json({
-      error: 'Method not allowed'
+      error:
+        'Method not allowed'
     });
   }
 
   try {
-    const redis = getRedis();
+    const redis =
+      getRedis();
 
     const session =
       await requireSession(
@@ -39,7 +46,8 @@ export default async function handler(req, res) {
   } catch (error) {
     console.error(
       'GET /api/push/config:',
-      error?.message || error
+      error?.message ||
+        error
     );
 
     return res.status(500).json({

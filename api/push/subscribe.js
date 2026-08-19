@@ -1,5 +1,3 @@
-import crypto from 'node:crypto';
-
 import { getRedis } from '../../lib/redis.js';
 
 import {
@@ -9,6 +7,8 @@ import {
   requireSameOrigin,
   jsonBodySize
 } from '../../lib/security.js';
+
+import crypto from 'node:crypto';
 
 export default async function handler(req, res) {
   securityHeaders(res);
@@ -24,7 +24,7 @@ export default async function handler(req, res) {
     return;
   }
 
-  if (jsonBodySize(req) > 32 * 1024) {
+  if (jsonBodySize(req) > 16 * 1024) {
     return res.status(413).json({
       error: 'Слишком большой запрос'
     });
@@ -42,44 +42,74 @@ export default async function handler(req, res) {
 
     if (!session) return;
 
+    if (!session.deviceId) {
+      return res.status(400).json({
+        error:
+          'Сессия не привязана к устройству'
+      });
+    }
+
     const subscription =
       req.body?.subscription;
 
     if (
       !subscription ||
-      typeof subscription !== 'object' ||
-      typeof subscription.endpoint !== 'string' ||
-      !subscription.keys ||
-      typeof subscription.keys.p256dh !== 'string' ||
-      typeof subscription.keys.auth !== 'string'
+      typeof subscription !== 'object'
     ) {
       return res.status(400).json({
-        error: 'Некорректная push-подписка'
+        error:
+          'Некорректная push-подписка'
       });
     }
 
-    const hash =
+    if (
+      typeof subscription.endpoint !==
+        'string' ||
+      !subscription.endpoint
+    ) {
+      return res.status(400).json({
+        error:
+          'Некорректный endpoint'
+      });
+    }
+
+    if (
+      !subscription.keys ||
+      typeof subscription.keys !==
+        'object' ||
+      typeof subscription.keys.p256dh !==
+        'string' ||
+      typeof subscription.keys.auth !==
+        'string'
+    ) {
+      return res.status(400).json({
+        error:
+          'Некорректные ключи push-подписки'
+      });
+    }
+
+    const endpointHash =
       crypto
         .createHash('sha256')
         .update(subscription.endpoint)
         .digest('hex');
 
     const key =
-      `push:${session.username}:${hash}`;
+      `push:${session.username}:${endpointHash}`;
 
     await redis.set(
       key,
       JSON.stringify({
-        endpoint: subscription.endpoint,
-        expirationTime:
-          subscription.expirationTime ?? null,
-        keys: {
-          p256dh:
-            subscription.keys.p256dh,
-          auth:
-            subscription.keys.auth
-        },
-        createdAt: Date.now()
+        username:
+          session.username,
+
+        deviceId:
+          session.deviceId,
+
+        subscription,
+
+        updatedAt:
+          Date.now()
       })
     );
 
@@ -93,7 +123,8 @@ export default async function handler(req, res) {
     );
 
     return res.status(500).json({
-      error: 'Ошибка регистрации уведомлений'
+      error:
+        'Ошибка регистрации уведомлений'
     });
   }
 }

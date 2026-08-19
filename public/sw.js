@@ -1,4 +1,5 @@
-const CACHE_NAME = 'ncr-messenger-v3-2';
+const CACHE_NAME =
+  'ncr-messenger-v3-3';
 
 const STATIC_ASSETS = [
   '/',
@@ -6,8 +7,10 @@ const STATIC_ASSETS = [
   '/style.css',
   '/app.js',
   '/ncr-lwe.js',
-  '/manifest.json'
+  '/manifest.json',
+  '/icon-192.png'
 ];
+
 
 self.addEventListener(
   'install',
@@ -16,7 +19,9 @@ self.addEventListener(
       caches
         .open(CACHE_NAME)
         .then((cache) =>
-          cache.addAll(STATIC_ASSETS)
+          cache.addAll(
+            STATIC_ASSETS
+          )
         )
         .then(() =>
           self.skipWaiting()
@@ -24,6 +29,7 @@ self.addEventListener(
     );
   }
 );
+
 
 self.addEventListener(
   'activate',
@@ -50,8 +56,12 @@ self.addEventListener(
   }
 );
 
+
 /*
  * Push notification.
+ *
+ * В push никогда не передаётся
+ * текст сообщения.
  */
 self.addEventListener(
   'push',
@@ -71,31 +81,43 @@ self.addEventListener(
         ? data.sender
         : 'Новое сообщение';
 
-    const title =
-      'NCR Messenger';
+    const messageId =
+      data.messageId ||
+      Date.now();
 
     const options = {
-      body: `${sender}: новое сообщение`,
-      icon: '/icon-192.png',
-      badge: '/icon-192.png',
-      tag: `message-${data.messageId || Date.now()}`,
+      body:
+        `${sender}: новое сообщение`,
+
+      icon:
+        '/icon-192.png',
+
+      badge:
+        '/icon-192.png',
+
+      tag:
+        `message-${messageId}`,
+
       renotify: true,
+
+      requireInteraction: false,
+
       data: {
         url: '/',
-        messageId:
-          data.messageId || null
+        messageId
       }
     };
 
     event.waitUntil(
       self.registration
         .showNotification(
-          title,
+          'NCR Messenger',
           options
         )
         .then(async () => {
           if (
-            'setAppBadge' in self.registration
+            'setAppBadge' in
+            self.registration
           ) {
             try {
               await self.registration
@@ -107,8 +129,10 @@ self.addEventListener(
   }
 );
 
+
 /*
- * User tapped notification.
+ * Пользователь нажал
+ * на уведомление.
  */
 self.addEventListener(
   'notificationclick',
@@ -121,7 +145,9 @@ self.addEventListener(
         includeUncontrolled: true
       })
       .then((clientList) => {
-        for (const client of clientList) {
+        for (
+          const client of clientList
+        ) {
           if (
             'focus' in client
           ) {
@@ -141,8 +167,9 @@ self.addEventListener(
   }
 );
 
+
 /*
- * Never cache API.
+ * API никогда не кэшируем.
  */
 self.addEventListener(
   'fetch',
@@ -164,6 +191,44 @@ self.addEventListener(
     if (
       request.method !== 'GET'
     ) {
+      return;
+    }
+
+    /*
+     * HTML / JS / CSS всегда
+     * сначала пробуем получить
+     * свежую версию с сервера.
+     */
+    if (
+      request.destination === 'document' ||
+      url.pathname.endsWith('.js') ||
+      url.pathname.endsWith('.css')
+    ) {
+      event.respondWith(
+        fetch(request, {
+          cache: 'no-store'
+        })
+        .then((response) => {
+          const copy =
+            response.clone();
+
+          caches
+            .open(CACHE_NAME)
+            .then((cache) =>
+              cache.put(
+                request,
+                copy
+              )
+            )
+            .catch(() => {});
+
+          return response;
+        })
+        .catch(() =>
+          caches.match(request)
+        )
+      );
+
       return;
     }
 

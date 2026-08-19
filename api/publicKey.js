@@ -37,23 +37,53 @@ export default async function handler(req, res) {
 
     if (!validUsername(username)) {
       return res.status(400).json({
-        error: 'Некорректное имя пользователя'
+        error:
+          'Некорректное имя пользователя'
       });
     }
 
-    const publicKey =
-      await redis.get(
-        `publicKey:${username}`
+    const keys =
+      await redis.keys(
+        `device:${username}:*`
       );
 
-    if (!publicKey) {
+    const devices = [];
+
+    for (const key of keys) {
+      const raw =
+        await redis.get(key);
+
+      if (!raw) continue;
+
+      try {
+        const device =
+          typeof raw === 'string'
+            ? JSON.parse(raw)
+            : raw;
+
+        if (
+          device?.deviceId &&
+          device?.publicKey
+        ) {
+          devices.push({
+            deviceId: device.deviceId,
+            publicKey: device.publicKey
+          });
+        }
+      } catch {
+        // ignore invalid device record
+      }
+    }
+
+    if (!devices.length) {
       return res.status(404).json({
         error: 'Пользователь не найден'
       });
     }
 
     return res.status(200).json({
-      publicKey
+      username,
+      devices
     });
   } catch (error) {
     console.error(

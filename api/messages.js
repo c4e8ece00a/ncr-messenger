@@ -1,4 +1,6 @@
-import { getRedis } from '../lib/redis.js';
+import {
+  getRedis
+} from '../lib/redis.js';
 
 import {
   securityHeaders,
@@ -10,18 +12,23 @@ import {
 
 const MAX_HISTORY = 200;
 
-export default async function handler(req, res) {
+export default async function handler(
+  req,
+  res
+) {
   securityHeaders(res);
   noStore(res);
 
   if (req.method !== 'GET') {
     return res.status(405).json({
-      error: 'Method not allowed'
+      error:
+        'Method not allowed'
     });
   }
 
   try {
-    const redis = getRedis();
+    const redis =
+      getRedis();
 
     const session =
       await requireSession(
@@ -39,7 +46,8 @@ export default async function handler(req, res) {
 
     if (
       !validUsername(username) ||
-      username !== session.username
+      username !==
+        session.username
     ) {
       return res.status(403).json({
         error:
@@ -47,29 +55,18 @@ export default async function handler(req, res) {
       });
     }
 
-    const deviceId =
-      session.deviceId;
-
-    if (!deviceId) {
-      return res.status(400).json({
-        error:
-          'Сессия не привязана к устройству'
-      });
-    }
-
-    const key =
-      `messages:${username}:${deviceId}`;
-
     const rawMessages =
       await redis.lrange(
-        key,
+        `messages:${username}`,
         -MAX_HISTORY,
         -1
       );
 
     const messages = [];
 
-    for (const raw of rawMessages) {
+    for (
+      const raw of rawMessages
+    ) {
       try {
         const parsed =
           typeof raw === 'string'
@@ -77,11 +74,29 @@ export default async function handler(req, res) {
             : raw;
 
         if (
-          parsed &&
-          typeof parsed === 'object'
+          !parsed ||
+          typeof parsed !==
+            'object'
         ) {
-          messages.push(parsed);
+          continue;
         }
+
+        /*
+         * Новая схема:
+         * показываем только копию
+         * для текущего устройства.
+         */
+        if (
+          parsed.recipientDeviceId &&
+          parsed.recipientDeviceId !==
+            session.deviceId
+        ) {
+          continue;
+        }
+
+        messages.push(
+          parsed
+        );
       } catch (error) {
         console.error(
           'Invalid message:',
@@ -96,7 +111,8 @@ export default async function handler(req, res) {
   } catch (error) {
     console.error(
       'GET /api/messages:',
-      error?.message || error
+      error?.message ||
+        error
     );
 
     return res.status(500).json({

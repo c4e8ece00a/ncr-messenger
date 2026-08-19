@@ -6,7 +6,8 @@ import {
   securityHeaders,
   noStore,
   requireSession,
-  requireSameOrigin
+  requireSameOrigin,
+  jsonBodySize
 } from '../../lib/security.js';
 
 export default async function handler(req, res) {
@@ -21,6 +22,12 @@ export default async function handler(req, res) {
 
   if (!requireSameOrigin(req, res)) {
     return;
+  }
+
+  if (jsonBodySize(req) > 8 * 1024) {
+    return res.status(413).json({
+      error: 'Слишком большой запрос'
+    });
   }
 
   try {
@@ -42,19 +49,45 @@ export default async function handler(req, res) {
 
     if (!endpoint) {
       return res.status(400).json({
-        error: 'endpoint required'
+        error:
+          'Endpoint не указан'
       });
     }
 
-    const hash =
+    const endpointHash =
       crypto
         .createHash('sha256')
         .update(endpoint)
         .digest('hex');
 
-    await redis.del(
-      `push:${session.username}:${hash}`
-    );
+    const key =
+      `push:${session.username}:${endpointHash}`;
+
+    const raw =
+      await redis.get(key);
+
+    if (raw) {
+      let stored;
+
+      try {
+        stored =
+          typeof raw === 'string'
+            ? JSON.parse(raw)
+            : raw;
+      } catch {
+        stored = null;
+      }
+
+      /*
+       * Удаляем только собственную подписку.
+       */
+      if (
+        stored?.username ===
+          session.username
+      ) {
+        await redis.del(key);
+      }
+    }
 
     return res.status(200).json({
       status: 'unsubscribed'
@@ -66,7 +99,8 @@ export default async function handler(req, res) {
     );
 
     return res.status(500).json({
-      error: 'Ошибка отключения уведомлений'
+      error:
+        'Ошибка отключения уведомлений'
     });
   }
 }

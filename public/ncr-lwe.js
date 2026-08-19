@@ -1,12 +1,9 @@
 // NCR-LWE demo primitive.
-// IMPORTANT: educational prototype,
-// NOT production cryptography.
-
+// IMPORTANT: this is an educational prototype, NOT production cryptography.
 const N = 8;
 const Q = 257;
 const SMALL_BOUND = 1;
-const MESSAGE_ONE =
-  Math.floor(Q / 2);
+const MESSAGE_ONE = Math.floor(Q / 2);
 
 function mod(n, m = Q) {
   return ((n % m) + m) % m;
@@ -14,7 +11,6 @@ function mod(n, m = Q) {
 
 function center(v) {
   v = mod(v);
-
   return v > Math.floor(Q / 2)
     ? v - Q
     : v;
@@ -30,7 +26,7 @@ function randomInt(maxExclusive) {
   const limit =
     Math.floor(
       0x100000000 /
-      maxExclusive
+        maxExclusive
     ) *
     maxExclusive;
 
@@ -38,12 +34,17 @@ function randomInt(maxExclusive) {
     new Uint32Array(1);
 
   do {
-    crypto.getRandomValues(buf);
+    crypto.getRandomValues(
+      buf
+    );
   } while (
     buf[0] >= limit
   );
 
-  return buf[0] % maxExclusive;
+  return (
+    buf[0] %
+    maxExclusive
+  );
 }
 
 function uniformMatrix() {
@@ -56,7 +57,8 @@ function uniformMatrix() {
         {
           length: N
         },
-        () => randomInt(Q)
+        () =>
+          randomInt(Q)
       )
   );
 }
@@ -73,8 +75,11 @@ function smallMatrix() {
         },
         () =>
           randomInt(
-            2 * SMALL_BOUND + 1
-          ) - SMALL_BOUND
+            2 *
+              SMALL_BOUND +
+              1
+          ) -
+          SMALL_BOUND
       )
   );
 }
@@ -89,7 +94,8 @@ function bitMatrix() {
         {
           length: N
         },
-        () => randomInt(2)
+        () =>
+          randomInt(2)
       )
   );
 }
@@ -100,7 +106,8 @@ function matAdd(A, B) {
       row.map(
         (value, j) =>
           mod(
-            value + B[i][j]
+            value +
+              B[i][j]
           )
       )
   );
@@ -112,7 +119,8 @@ function matSub(A, B) {
       row.map(
         (value, j) =>
           mod(
-            value - B[i][j]
+            value -
+              B[i][j]
           )
       )
   );
@@ -125,7 +133,8 @@ function matMul(A, B) {
         length: N
       },
       () =>
-        new Array(N).fill(0)
+        new Array(N)
+          .fill(0)
     );
 
   for (
@@ -153,7 +162,8 @@ function matMul(A, B) {
         result[i][j] =
           mod(
             result[i][j] +
-            aik * B[k][j]
+              aik *
+                B[k][j]
           );
       }
     }
@@ -183,11 +193,15 @@ function generateKeypair() {
       A,
       B
     },
-    privateKey: S
+
+    privateKey:
+      S
   };
 }
 
-function encapsulate(publicKey) {
+function encapsulate(
+  publicKey
+) {
   const {
     A,
     B
@@ -198,9 +212,9 @@ function encapsulate(publicKey) {
 
   const encodedK =
     K.map(
-      (row) =>
+      row =>
         row.map(
-          (bit) =>
+          bit =>
             bit
               ? MESSAGE_ONE
               : 0
@@ -218,14 +232,20 @@ function encapsulate(publicKey) {
 
   const U =
     matAdd(
-      matMul(R1, A),
+      matMul(
+        R1,
+        A
+      ),
       E1
     );
 
   const V =
     matAdd(
       matAdd(
-        matMul(R1, B),
+        matMul(
+          R1,
+          B
+        ),
         R2
       ),
       encodedK
@@ -236,6 +256,7 @@ function encapsulate(publicKey) {
       U,
       V
     },
+
     K
   };
 }
@@ -269,7 +290,8 @@ function decapsulate(
         length: N
       },
       () =>
-        new Array(N).fill(0)
+        new Array(N)
+          .fill(0)
     );
 
   for (
@@ -283,18 +305,21 @@ function decapsulate(
       j++
     ) {
       const residue =
-        mod(M[i][j]);
+        mod(
+          M[i][j]
+        );
 
       const distanceToZero =
         Math.min(
           residue,
-          Q - residue
+          Q -
+            residue
         );
 
       const rawDistanceToOne =
         Math.abs(
           residue -
-          MESSAGE_ONE
+            MESSAGE_ONE
         );
 
       const distanceToOne =

@@ -1,4 +1,6 @@
-import { getRedis } from '../lib/redis.js';
+import {
+  getRedis
+} from '../lib/redis.js';
 
 import {
   securityHeaders,
@@ -8,18 +10,23 @@ import {
   validUsername
 } from '../lib/security.js';
 
-export default async function handler(req, res) {
+export default async function handler(
+  req,
+  res
+) {
   securityHeaders(res);
   noStore(res);
 
   if (req.method !== 'GET') {
     return res.status(405).json({
-      error: 'Method not allowed'
+      error:
+        'Method not allowed'
     });
   }
 
   try {
-    const redis = getRedis();
+    const redis =
+      getRedis();
 
     const session =
       await requireSession(
@@ -35,7 +42,9 @@ export default async function handler(req, res) {
         req.query?.username
       );
 
-    if (!validUsername(username)) {
+    if (
+      !validUsername(username)
+    ) {
       return res.status(400).json({
         error:
           'Некорректное имя пользователя'
@@ -49,7 +58,9 @@ export default async function handler(req, res) {
 
     const devices = [];
 
-    for (const key of keys) {
+    for (
+      const key of keys
+    ) {
       const raw =
         await redis.get(key);
 
@@ -66,33 +77,38 @@ export default async function handler(req, res) {
           device?.publicKey
         ) {
           devices.push({
-            deviceId: device.deviceId,
-            publicKey: device.publicKey
+            deviceId:
+              device.deviceId,
+
+            publicKey:
+              device.publicKey
           });
         }
-      } catch {
-        // ignore invalid device record
-      }
+      } catch {}
     }
 
-    if (!devices.length) {
+    if (
+      devices.length === 0
+    ) {
       return res.status(404).json({
-        error: 'Пользователь не найден'
+        error:
+          'У пользователя нет зарегистрированных устройств'
       });
     }
 
     return res.status(200).json({
-      username,
       devices
     });
   } catch (error) {
     console.error(
       'GET /api/publicKey:',
-      error?.message || error
+      error?.message ||
+        error
     );
 
     return res.status(500).json({
-      error: 'Ошибка базы данных'
+      error:
+        'Ошибка базы данных'
     });
   }
 }

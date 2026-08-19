@@ -52,8 +52,8 @@ export default async function handler(req, res) {
         req.body?.recipient
       );
 
-    const payload =
-      req.body?.payload;
+    const payloads =
+      req.body?.payloads;
 
     if (!validUsername(recipient)) {
       return res.status(400).json({
@@ -62,31 +62,19 @@ export default async function handler(req, res) {
     }
 
     if (
-      !payload ||
-      typeof payload !== 'object'
+      !Array.isArray(payloads) ||
+      !payloads.length
     ) {
       return res.status(400).json({
-        error: 'Некорректный encrypted payload'
+        error:
+          'Необходимо зашифровать сообщение для устройств получателя'
       });
     }
 
-    if (
-      !payload.U ||
-      !payload.V ||
-      !payload.nonce ||
-      !payload.ciphertext
-    ) {
+    if (payloads.length > 20) {
       return res.status(400).json({
-        error: 'Повреждённый encrypted payload'
-      });
-    }
-
-    const payloadSize =
-      JSON.stringify(payload).length;
-
-    if (payloadSize > MAX_PAYLOAD_SIZE) {
-      return res.status(413).json({
-        error: 'Encrypted payload слишком большой'
+        error:
+          'Слишком много устройств получателя'
       });
     }
 
@@ -101,34 +89,142 @@ export default async function handler(req, res) {
       });
     }
 
-    const message = {
-      id: crypto.randomUUID(),
+    const deviceKeys =
+      new Map();
 
-      sender: session.username,
+    const deviceRecords =
+      await redis.keys(
+        `device:${recipient}:*`
+      );
 
-      recipient,
+    for (const key of deviceRecords) {
+      const raw =
+        await redis.get(key);
 
-      createdAt: Date.now(),
+      if (!raw) continue;
 
-      ...payload
-    };
+      try {
+        const device =
+          typeof raw === 'string'
+            ? JSON.parse(raw)
+            : raw;
 
-    await redis.rpush(
-      `messages:${recipient}`,
-      JSON.stringify(message)
-    );
+        if (
+          device?.deviceId &&
+          device?.publicKey
+        ) {
+          deviceKeys.set(
+            device.deviceId,
+            device
+          );
+        }
+      } catch {
+        // ignore invalid device
+      }
+    }
+
+    if (!deviceKeys.size) {
+      return res.status(404).json({
+        error:
+          'У получателя нет зарегистрированных устройств'
+      });
+    }
+
+    const validPayloads = [];
+
+    for (const item of payloads) {
+      if (
+        !item ||
+        typeof item !== 'object'
+      ) {
+        continue;
+      }
+
+      const deviceId =
+        String(
+          item.deviceId || ''
+        );
+
+      const payload =
+        item.payload;
+
+      if (
+        !deviceId ||
+        !deviceKeys.has(deviceId) ||
+        !payload ||
+        typeof payload !== 'object'
+      ) {
+        continue;
+      }
+
+      if (
+        !payload.U ||
+        !payload.V ||
+        !payload.nonce ||
+        !payload.ciphertext
+      ) {
+        continue;
+      }
+
+      const payloadSize =
+        JSON.stringify(payload).length;
+
+      if (
+        payloadSize > MAX_PAYLOAD_SIZE
+      ) {
+        continue;
+      }
+
+      validPayloads.push({
+        deviceId,
+        payload
+      });
+    }
+
+    if (!validPayloads.length) {
+      return res.status(400).json({
+        error:
+          'Нет корректных encrypted payload'
+      });
+    }
+
+    const messageId =
+      crypto.randomUUID();
+
+    const createdAt =
+      Date.now();
+
+    let stored = 0;
 
     /*
-     * Push содержит только информацию о событии.
+     * Для каждого устройства получателя
+     * создаём отдельную копию сообщения.
      *
-     * Никакого текста сообщения здесь нет.
+     * У каждого устройства собственный
+     * public/private key.
      */
-    const pushPayload = {
-      type: 'new-message',
-      sender: session.username,
-      messageId: message.id
-    };
+    for (const item of validPayloads) {
+      const message = {
+        id: messageId,
+        deviceId: item.deviceId,
+        sender: session.username,
+        recipient,
+        createdAt,
+        ...item.payload
+      };
 
+      await redis.rpush(
+        `messages:${recipient}:${item.deviceId}`,
+        JSON.stringify(message)
+      );
+
+      stored++;
+    }
+
+    /*
+     * Push отправляется на ВСЕ устройства
+     * получателя, у которых есть подписка.
+     */
     const subscriptions =
       await redis.keys(
         `push:${recipient}:*`
@@ -150,7 +246,11 @@ export default async function handler(req, res) {
 
         await sendPush(
           subscription,
-          pushPayload
+          {
+            type: 'new-message',
+            sender: session.username,
+            messageId
+          }
         );
 
         pushSent++;
@@ -162,10 +262,6 @@ export default async function handler(req, res) {
           pushError
         );
 
-        /*
-         * 404/410 означает,
-         * что подписка больше не существует.
-         */
         if (
           pushError?.statusCode === 404 ||
           pushError?.statusCode === 410
@@ -177,7 +273,8 @@ export default async function handler(req, res) {
 
     return res.status(200).json({
       status: 'sent',
-      id: message.id,
+      id: messageId,
+      stored,
       pushSent
     });
   } catch (error) {

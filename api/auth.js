@@ -5,6 +5,8 @@ import {
   MAX_PASSWORD_LENGTH,
   normalizeUsername,
   validUsername,
+  normalizeDeviceId,
+  validDeviceId,
   newToken,
   sha256,
   setSessionCookie,
@@ -15,7 +17,9 @@ import {
   securityHeaders
 } from '../lib/security.js';
 
-const SESSION_TTL = 60 * 60 * 24 * 30;
+const SESSION_TTL =
+  60 * 60 * 24 * 30;
+
 const MIN_PASSWORD_LENGTH = 8;
 
 function genericAuthError(res) {
@@ -56,10 +60,16 @@ export default async function handler(req, res) {
     const publicKey =
       body.publicKey;
 
+    const deviceId =
+      normalizeDeviceId(body.deviceId);
+
     if (
       !validUsername(username) ||
       password.length < MIN_PASSWORD_LENGTH ||
-      password.length > MAX_PASSWORD_LENGTH
+      password.length > MAX_PASSWORD_LENGTH ||
+      !validDeviceId(deviceId) ||
+      !publicKey ||
+      typeof publicKey !== 'object'
     ) {
       return genericAuthError(res);
     }
@@ -79,35 +89,25 @@ export default async function handler(req, res) {
 
     if (!rl.allowed) {
       return res.status(429).json({
-        error: 'Слишком много попыток. Попробуйте позже.'
+        error:
+          'Слишком много попыток. Попробуйте позже.'
       });
     }
 
-    const userKey = `user:${username}`;
+    const userKey =
+      `user:${username}`;
 
     const existing =
       await redis.get(userKey);
 
     if (!existing) {
-      if (
-        !publicKey ||
-        typeof publicKey !== 'object'
-      ) {
-        return res.status(400).json({
-          error:
-            'Для нового аккаунта требуется publicKey'
-        });
-      }
-
-      const passwordHash = await hash(
-        password,
-        {
+      const passwordHash =
+        await hash(password, {
           algorithm: 'argon2id',
           memoryCost: 19456,
           timeCost: 2,
           parallelism: 1
-        }
-      );
+        });
 
       await redis.set(
         userKey,
@@ -116,11 +116,6 @@ export default async function handler(req, res) {
           passwordHash,
           createdAt: Date.now()
         })
-      );
-
-      await redis.set(
-        `publicKey:${username}`,
-        publicKey
       );
     } else {
       const user =
@@ -139,7 +134,9 @@ export default async function handler(req, res) {
 
       if (
         !valid &&
-        user?.passwordHash?.startsWith('sha256:')
+        user?.passwordHash?.startsWith(
+          'sha256:'
+        )
       ) {
         const legacy =
           sha256(password);
@@ -171,21 +168,22 @@ export default async function handler(req, res) {
       if (!valid) {
         return genericAuthError(res);
       }
-
-      if (publicKey) {
-        const storedKey =
-          await redis.get(
-            `publicKey:${username}`
-          );
-
-        if (!storedKey) {
-          await redis.set(
-            `publicKey:${username}`,
-            publicKey
-          );
-        }
-      }
     }
+
+    /*
+     * Каждый браузер / iPhone / устройство
+     * имеет собственную пару ключей.
+     */
+    await redis.set(
+      `device:${username}:${deviceId}`,
+      JSON.stringify({
+        username,
+        deviceId,
+        publicKey,
+        createdAt: Date.now(),
+        lastSeenAt: Date.now()
+      })
+    );
 
     const token =
       newToken(32);
@@ -194,6 +192,7 @@ export default async function handler(req, res) {
       `session:${sha256(token)}`,
       JSON.stringify({
         username,
+        deviceId,
         createdAt: Date.now()
       }),
       {
@@ -209,7 +208,8 @@ export default async function handler(req, res) {
 
     return res.status(200).json({
       status: 'ok',
-      username
+      username,
+      deviceId
     });
   } catch (error) {
     console.error(

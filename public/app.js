@@ -1,20 +1,56 @@
 let username = null;
 let privateKey = null;
 let publicKey = null;
+let deviceId = null;
 
 let pollingTimer = null;
 let pollingInProgress = false;
 let authInProgress = false;
 
-const renderedMessageIds =
-  new Set();
+const renderedMessageIds = new Set();
 
 const $ = (id) =>
   document.getElementById(id);
 
 
+function createDeviceId() {
+  const bytes =
+    crypto.getRandomValues(
+      new Uint8Array(24)
+    );
+
+  return Array.from(bytes)
+    .map((value) =>
+      value.toString(16).padStart(2, '0')
+    )
+    .join('');
+}
+
+
+function getDeviceId() {
+  let id =
+    localStorage.getItem(
+      'ncr_device_id'
+    );
+
+  if (
+    !id ||
+    id.length < 16
+  ) {
+    id = createDeviceId();
+
+    localStorage.setItem(
+      'ncr_device_id',
+      id
+    );
+  }
+
+  return id;
+}
+
+
 function keyStorageName(name) {
-  return `ncrlwe_keys:${name}`;
+  return `ncrlwe_keys:${name}:${deviceId}`;
 }
 
 
@@ -120,13 +156,11 @@ async function encryptMessage(
     );
 
   return {
-    nonce:
-      Array.from(nonce),
+    nonce: Array.from(nonce),
 
-    ciphertext:
-      Array.from(
-        new Uint8Array(ciphertext)
-      )
+    ciphertext: Array.from(
+      new Uint8Array(ciphertext)
+    )
   };
 }
 
@@ -140,8 +174,7 @@ async function decryptMessage(
     await crypto.subtle.decrypt(
       {
         name: 'AES-GCM',
-        iv:
-          new Uint8Array(nonce)
+        iv: new Uint8Array(nonce)
       },
       aesKey,
       new Uint8Array(ciphertext)
@@ -179,7 +212,8 @@ async function readJsonResponse(res) {
 async function apiAuth(
   name,
   password,
-  key
+  key,
+  currentDeviceId
 ) {
   const res =
     await fetch('/api/auth', {
@@ -192,6 +226,7 @@ async function apiAuth(
       body: JSON.stringify({
         username: name,
         password,
+        deviceId: currentDeviceId,
         publicKey: key
       })
     });
@@ -200,7 +235,7 @@ async function apiAuth(
 }
 
 
-async function apiGetPublicKey(name) {
+async function apiGetPublicKeys(name) {
   const url =
     `/api/publicKey?username=${encodeURIComponent(name)}&_=${Date.now()}`;
 
@@ -213,13 +248,15 @@ async function apiGetPublicKey(name) {
   const data =
     await readJsonResponse(res);
 
-  return data.publicKey;
+  return Array.isArray(data.devices)
+    ? data.devices
+    : [];
 }
 
 
 async function apiSend(
   recipient,
-  payload
+  payloads
 ) {
   const res =
     await fetch('/api/send', {
@@ -231,7 +268,7 @@ async function apiSend(
       },
       body: JSON.stringify({
         recipient,
-        payload
+        payloads
       })
     });
 
@@ -398,9 +435,7 @@ function addMessage(
   }
 
   const wrap =
-    document.createElement(
-      'div'
-    );
+    document.createElement('div');
 
   wrap.className =
     `message-wrap ${
@@ -415,9 +450,7 @@ function addMessage(
   }
 
   const bubble =
-    document.createElement(
-      'div'
-    );
+    document.createElement('div');
 
   bubble.className =
     'message';
@@ -427,9 +460,7 @@ function addMessage(
     sender
   ) {
     const senderEl =
-      document.createElement(
-        'div'
-      );
+      document.createElement('div');
 
     senderEl.className =
       'message-sender';
@@ -443,9 +474,7 @@ function addMessage(
   }
 
   const textEl =
-    document.createElement(
-      'div'
-    );
+    document.createElement('div');
 
   textEl.textContent =
     text;
@@ -455,9 +484,7 @@ function addMessage(
   );
 
   const meta =
-    document.createElement(
-      'div'
-    );
+    document.createElement('div');
 
   meta.className =
     'message-meta';
@@ -495,6 +522,19 @@ async function processIncomingMessage(
     );
   }
 
+  /*
+   * Сервер положил в очередь именно
+   * ciphertext для этого deviceId.
+   */
+  if (
+    payload.deviceId &&
+    payload.deviceId !== deviceId
+  ) {
+    throw new Error(
+      'Сообщение предназначено другому устройству'
+    );
+  }
+
   const K =
     NCRLWE.decapsulate(
       privateKey,
@@ -524,7 +564,7 @@ async function processIncomingMessage(
       timestamp:
         payload.createdAt,
       id:
-        payload.id
+        `${payload.id}:${payload.deviceId || deviceId}`
     }
   );
 }
@@ -544,10 +584,6 @@ async function loadHistory() {
         ? data.messages
         : [];
 
-    /*
-     * Старые сообщения
-     * показываем от старых к новым.
-     */
     for (const payload of messages) {
       try {
         await processIncomingMessage(
@@ -585,14 +621,6 @@ async function checkMessages() {
   pollingInProgress = true;
 
   try {
-    /*
-     * Пока приложение открыто,
-     * периодически проверяем Redis.
-     *
-     * Push отвечает за уведомление,
-     * polling — за фактическую загрузку
-     * сообщения в интерфейс.
-     */
     const data =
       await apiGetMessages();
 
@@ -629,9 +657,7 @@ async function checkMessages() {
         true
       );
     } else {
-      setStatus(
-        'Подключено'
-      );
+      setStatus('Подключено');
     }
   } catch (error) {
     console.error(
@@ -731,9 +757,7 @@ async function enableNotifications() {
   const permission =
     await Notification.requestPermission();
 
-  if (
-    permission !== 'granted'
-  ) {
+  if (permission !== 'granted') {
     throw new Error(
       'Разрешение на уведомления не предоставлено'
     );
@@ -757,7 +781,6 @@ async function enableNotifications() {
       await registration.pushManager
         .subscribe({
           userVisibleOnly: true,
-
           applicationServerKey:
             base64ToUint8Array(
               config.publicKey
@@ -770,7 +793,7 @@ async function enableNotifications() {
   );
 
   localStorage.setItem(
-    'ncr_push_enabled',
+    `ncr_push_enabled:${deviceId}`,
     '1'
   );
 
@@ -800,7 +823,7 @@ async function disableNotifications() {
   }
 
   localStorage.removeItem(
-    'ncr_push_enabled'
+    `ncr_push_enabled:${deviceId}`
   );
 
   $('notification-icon')
@@ -905,12 +928,16 @@ $('login-form')
         'Подключение…';
 
       try {
+        deviceId =
+          getDeviceId();
+
         loadOrGenerateKeys(name);
 
         await apiAuth(
           name,
           password,
-          publicKey
+          publicKey,
+          deviceId
         );
 
         username = name;
@@ -1053,46 +1080,68 @@ async function sendMessage() {
   );
 
   try {
-    const recipientPub =
-      await apiGetPublicKey(
+    const recipientDevices =
+      await apiGetPublicKeys(
         recipient
       );
 
-    const {
-      ciphertext,
-      K
-    } =
-      NCRLWE.encapsulate(
-        recipientPub
+    if (!recipientDevices.length) {
+      throw new Error(
+        'У получателя нет зарегистрированных устройств'
       );
+    }
 
-    const aesKey =
-      await deriveAesKey(K);
+    /*
+     * Одно и то же сообщение
+     * шифруется отдельно для каждого
+     * устройства получателя.
+     */
+    const payloads = [];
 
-    const encrypted =
-      await encryptMessage(
-        aesKey,
-        message
-      );
+    for (
+      const device of recipientDevices
+    ) {
+      const {
+        ciphertext,
+        K
+      } =
+        NCRLWE.encapsulate(
+          device.publicKey
+        );
 
-    const payload = {
-      U:
-        ciphertext.U,
+      const aesKey =
+        await deriveAesKey(K);
 
-      V:
-        ciphertext.V,
+      const encrypted =
+        await encryptMessage(
+          aesKey,
+          message
+        );
 
-      nonce:
-        encrypted.nonce,
+      payloads.push({
+        deviceId:
+          device.deviceId,
 
-      ciphertext:
-        encrypted.ciphertext
-    };
+        payload: {
+          U:
+            ciphertext.U,
+
+          V:
+            ciphertext.V,
+
+          nonce:
+            encrypted.nonce,
+
+          ciphertext:
+            encrypted.ciphertext
+        }
+      });
+    }
 
     const result =
       await apiSend(
         recipient,
-        payload
+        payloads
       );
 
     addMessage(
@@ -1101,7 +1150,7 @@ async function sendMessage() {
         outgoing: true,
         sender: username,
         timestamp: Date.now(),
-        id: result.id
+        id: `${result.id}:outgoing`
       }
     );
 
@@ -1171,6 +1220,9 @@ $('message-input')
   );
 
 
+deviceId =
+  getDeviceId();
+
 const lastUsername =
   localStorage.getItem(
     'ncrlwe_last_username'
@@ -1186,7 +1238,18 @@ if (
   'serviceWorker' in navigator
 ) {
   navigator.serviceWorker
-    .register('/sw.js')
+    .register(
+      '/sw.js',
+      {
+        updateViaCache: 'none'
+      }
+    )
+    .then(
+      (registration) => {
+        registration.update()
+          .catch(() => {});
+      }
+    )
     .catch(
       (error) =>
         console.warn(

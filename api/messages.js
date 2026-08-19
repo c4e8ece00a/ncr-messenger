@@ -42,12 +42,23 @@ export default async function handler(req, res) {
       username !== session.username
     ) {
       return res.status(403).json({
-        error: 'Недопустимый пользователь'
+        error:
+          'Недопустимый пользователь'
+      });
+    }
+
+    const deviceId =
+      session.deviceId;
+
+    if (!deviceId) {
+      return res.status(400).json({
+        error:
+          'Сессия не привязана к устройству'
       });
     }
 
     const key =
-      `messages:${username}`;
+      `messages:${username}:${deviceId}`;
 
     const rawMessages =
       await redis.lrange(
@@ -89,7 +100,8 @@ export default async function handler(req, res) {
     );
 
     return res.status(500).json({
-      error: 'Ошибка чтения сообщений'
+      error:
+        'Ошибка чтения сообщений'
     });
   }
 }

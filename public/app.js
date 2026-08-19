@@ -1,46 +1,38 @@
 let username = null;
+
 let privateKey = null;
 let publicKey = null;
+
 let deviceId = null;
 
 let pollingTimer = null;
 let pollingInProgress = false;
 let authInProgress = false;
 
-const renderedMessageIds = new Set();
+const renderedMessageIds =
+  new Set();
 
 const $ = (id) =>
   document.getElementById(id);
 
 
-function createDeviceId() {
-  const bytes =
-    crypto.getRandomValues(
-      new Uint8Array(24)
-    );
-
-  return Array.from(bytes)
-    .map((value) =>
-      value.toString(16).padStart(2, '0')
-    )
-    .join('');
-}
-
+/* =========================
+   DEVICE
+========================= */
 
 function getDeviceId() {
-  let id =
-    localStorage.getItem(
-      'ncr_device_id'
-    );
+  const key =
+    'ncr_device_id';
 
-  if (
-    !id ||
-    id.length < 16
-  ) {
-    id = createDeviceId();
+  let id =
+    localStorage.getItem(key);
+
+  if (!id) {
+    id =
+      crypto.randomUUID();
 
     localStorage.setItem(
-      'ncr_device_id',
+      key,
       id
     );
   }
@@ -49,12 +41,17 @@ function getDeviceId() {
 }
 
 
+/* =========================
+   KEYS
+========================= */
+
 function keyStorageName(name) {
   return `ncrlwe_keys:${name}:${deviceId}`;
 }
 
-
-function loadOrGenerateKeys(name) {
+function loadOrGenerateKeys(
+  name
+) {
   const storageKey =
     keyStorageName(name);
 
@@ -106,6 +103,10 @@ function loadOrGenerateKeys(name) {
 }
 
 
+/* =========================
+   AES
+========================= */
+
 async function deriveAesKey(K) {
   const bytes =
     NCRLWE.matrixToBytes(K);
@@ -129,7 +130,6 @@ async function deriveAesKey(K) {
     ]
   );
 }
-
 
 async function encryptMessage(
   aesKey,
@@ -156,14 +156,17 @@ async function encryptMessage(
     );
 
   return {
-    nonce: Array.from(nonce),
+    nonce:
+      Array.from(nonce),
 
-    ciphertext: Array.from(
-      new Uint8Array(ciphertext)
-    )
+    ciphertext:
+      Array.from(
+        new Uint8Array(
+          ciphertext
+        )
+      )
   };
 }
-
 
 async function decryptMessage(
   aesKey,
@@ -174,10 +177,15 @@ async function decryptMessage(
     await crypto.subtle.decrypt(
       {
         name: 'AES-GCM',
-        iv: new Uint8Array(nonce)
+        iv:
+          new Uint8Array(
+            nonce
+          )
       },
       aesKey,
-      new Uint8Array(ciphertext)
+      new Uint8Array(
+        ciphertext
+      )
     );
 
   return new TextDecoder()
@@ -185,7 +193,13 @@ async function decryptMessage(
 }
 
 
-async function readJsonResponse(res) {
+/* =========================
+   API
+========================= */
+
+async function readJsonResponse(
+  res
+) {
   const text =
     await res.text();
 
@@ -212,67 +226,89 @@ async function readJsonResponse(res) {
 async function apiAuth(
   name,
   password,
-  key,
-  currentDeviceId
+  key
 ) {
   const res =
-    await fetch('/api/auth', {
-      method: 'POST',
-      cache: 'no-store',
-      headers: {
-        'Content-Type':
-          'application/json'
-      },
-      body: JSON.stringify({
-        username: name,
-        password,
-        deviceId: currentDeviceId,
-        publicKey: key
-      })
-    });
+    await fetch(
+      '/api/auth',
+      {
+        method: 'POST',
+        cache: 'no-store',
 
-  return readJsonResponse(res);
+        headers: {
+          'Content-Type':
+            'application/json'
+        },
+
+        body:
+          JSON.stringify({
+            username:
+              name,
+
+            password,
+
+            publicKey:
+              key,
+
+            deviceId
+          })
+      }
+    );
+
+  return readJsonResponse(
+    res
+  );
 }
 
 
-async function apiGetPublicKeys(name) {
+async function apiGetPublicKey(
+  name
+) {
   const url =
     `/api/publicKey?username=${encodeURIComponent(name)}&_=${Date.now()}`;
 
   const res =
-    await fetch(url, {
-      method: 'GET',
-      cache: 'no-store'
-    });
+    await fetch(
+      url,
+      {
+        method: 'GET',
+        cache: 'no-store'
+      }
+    );
 
-  const data =
-    await readJsonResponse(res);
-
-  return Array.isArray(data.devices)
-    ? data.devices
-    : [];
+  return readJsonResponse(
+    res
+  );
 }
 
 
 async function apiSend(
   recipient,
-  payloads
+  encrypted
 ) {
   const res =
-    await fetch('/api/send', {
-      method: 'POST',
-      cache: 'no-store',
-      headers: {
-        'Content-Type':
-          'application/json'
-      },
-      body: JSON.stringify({
-        recipient,
-        payloads
-      })
-    });
+    await fetch(
+      '/api/send',
+      {
+        method: 'POST',
+        cache: 'no-store',
 
-  return readJsonResponse(res);
+        headers: {
+          'Content-Type':
+            'application/json'
+        },
+
+        body:
+          JSON.stringify({
+            recipient,
+            encrypted
+          })
+      }
+    );
+
+  return readJsonResponse(
+    res
+  );
 }
 
 
@@ -281,12 +317,17 @@ async function apiGetMessages() {
     `/api/messages?username=${encodeURIComponent(username)}&_=${Date.now()}`;
 
   const res =
-    await fetch(url, {
-      method: 'GET',
-      cache: 'no-store'
-    });
+    await fetch(
+      url,
+      {
+        method: 'GET',
+        cache: 'no-store'
+      }
+    );
 
-  return readJsonResponse(res);
+  return readJsonResponse(
+    res
+  );
 }
 
 
@@ -300,7 +341,9 @@ async function apiGetPushConfig() {
       }
     );
 
-  return readJsonResponse(res);
+  return readJsonResponse(
+    res
+  );
 }
 
 
@@ -313,17 +356,22 @@ async function apiSubscribePush(
       {
         method: 'POST',
         cache: 'no-store',
+
         headers: {
           'Content-Type':
             'application/json'
         },
-        body: JSON.stringify({
-          subscription
-        })
+
+        body:
+          JSON.stringify({
+            subscription
+          })
       }
     );
 
-  return readJsonResponse(res);
+  return readJsonResponse(
+    res
+  );
 }
 
 
@@ -336,25 +384,35 @@ async function apiUnsubscribePush(
       {
         method: 'POST',
         cache: 'no-store',
+
         headers: {
           'Content-Type':
             'application/json'
         },
-        body: JSON.stringify({
-          endpoint
-        })
+
+        body:
+          JSON.stringify({
+            endpoint
+          })
       }
     );
 
-  return readJsonResponse(res);
+  return readJsonResponse(
+    res
+  );
 }
 
+
+/* =========================
+   UI
+========================= */
 
 function setStatus(
   text,
   isError = false
 ) {
-  $('status-bar').textContent =
+  $('status-bar')
+    .textContent =
     text || '';
 
   $('status-bar')
@@ -364,48 +422,70 @@ function setStatus(
     );
 }
 
-
 function showChat(name) {
   $('current-user')
-    .textContent = name;
+    .textContent =
+    name;
 
   $('user-avatar')
     .textContent =
-    name.charAt(0).toUpperCase();
+    name
+      .charAt(0)
+      .toUpperCase();
 
   $('login-screen')
-    .classList.add('hidden');
+    .classList.add(
+      'hidden'
+    );
 
   $('chat-screen')
-    .classList.remove('hidden');
+    .classList.remove(
+      'hidden'
+    );
 
-  setStatus('Подключено');
+  setStatus(
+    'Подключено'
+  );
 }
-
 
 function showLogin() {
   $('chat-screen')
-    .classList.add('hidden');
+    .classList.add(
+      'hidden'
+    );
 
   $('login-screen')
-    .classList.remove('hidden');
+    .classList.remove(
+      'hidden'
+    );
 }
 
-
-function formatTime(timestamp) {
-  if (!timestamp) return '';
+function formatTime(
+  timestamp
+) {
+  if (!timestamp) {
+    return '';
+  }
 
   return new Intl.DateTimeFormat(
     'ru-RU',
     {
-      hour: '2-digit',
-      minute: '2-digit'
+      hour:
+        '2-digit',
+      minute:
+        '2-digit'
     }
   ).format(
-    new Date(timestamp)
+    new Date(
+      timestamp
+    )
   );
 }
 
+
+/* =========================
+   MESSAGES
+========================= */
 
 function addMessage(
   text,
@@ -424,7 +504,9 @@ function addMessage(
   }
 
   if (id) {
-    renderedMessageIds.add(id);
+    renderedMessageIds.add(
+      id
+    );
   }
 
   const empty =
@@ -435,7 +517,9 @@ function addMessage(
   }
 
   const wrap =
-    document.createElement('div');
+    document.createElement(
+      'div'
+    );
 
   wrap.className =
     `message-wrap ${
@@ -450,7 +534,9 @@ function addMessage(
   }
 
   const bubble =
-    document.createElement('div');
+    document.createElement(
+      'div'
+    );
 
   bubble.className =
     'message';
@@ -460,7 +546,9 @@ function addMessage(
     sender
   ) {
     const senderEl =
-      document.createElement('div');
+      document.createElement(
+        'div'
+      );
 
     senderEl.className =
       'message-sender';
@@ -474,7 +562,9 @@ function addMessage(
   }
 
   const textEl =
-    document.createElement('div');
+    document.createElement(
+      'div'
+    );
 
   textEl.textContent =
     text;
@@ -484,13 +574,17 @@ function addMessage(
   );
 
   const meta =
-    document.createElement('div');
+    document.createElement(
+      'div'
+    );
 
   meta.className =
     'message-meta';
 
   meta.textContent =
-    formatTime(timestamp);
+    formatTime(
+      timestamp
+    );
 
   bubble.appendChild(
     meta
@@ -501,12 +595,18 @@ function addMessage(
   );
 
   $('messages')
-    .appendChild(wrap);
+    .appendChild(
+      wrap
+    );
 
   $('messages').scrollTop =
     $('messages').scrollHeight;
 }
 
+
+/* =========================
+   DECRYPT
+========================= */
 
 async function processIncomingMessage(
   payload
@@ -522,25 +622,15 @@ async function processIncomingMessage(
     );
   }
 
-  /*
-   * Сервер положил в очередь именно
-   * ciphertext для этого deviceId.
-   */
-  if (
-    payload.deviceId &&
-    payload.deviceId !== deviceId
-  ) {
-    throw new Error(
-      'Сообщение предназначено другому устройству'
-    );
-  }
-
   const K =
     NCRLWE.decapsulate(
       privateKey,
       {
-        U: payload.U,
-        V: payload.V
+        U:
+          payload.U,
+
+        V:
+          payload.V
       }
     );
 
@@ -558,20 +648,29 @@ async function processIncomingMessage(
     plaintext,
     {
       outgoing: false,
+
       sender:
         payload.sender ||
         'Неизвестный',
+
       timestamp:
         payload.createdAt,
+
       id:
-        `${payload.id}:${payload.deviceId || deviceId}`
+        payload.id
     }
   );
 }
 
 
+/* =========================
+   HISTORY
+========================= */
+
 async function loadHistory() {
-  if (!username) return;
+  if (!username) {
+    return;
+  }
 
   try {
     const data =
@@ -584,7 +683,9 @@ async function loadHistory() {
         ? data.messages
         : [];
 
-    for (const payload of messages) {
+    for (
+      const payload of messages
+    ) {
       try {
         await processIncomingMessage(
           payload
@@ -610,6 +711,10 @@ async function loadHistory() {
 }
 
 
+/* =========================
+   POLLING
+========================= */
+
 async function checkMessages() {
   if (
     !username ||
@@ -618,7 +723,8 @@ async function checkMessages() {
     return;
   }
 
-  pollingInProgress = true;
+  pollingInProgress =
+    true;
 
   try {
     const data =
@@ -657,7 +763,9 @@ async function checkMessages() {
         true
       );
     } else {
-      setStatus('Подключено');
+      setStatus(
+        'Подключено'
+      );
     }
   } catch (error) {
     console.error(
@@ -670,7 +778,8 @@ async function checkMessages() {
       true
     );
   } finally {
-    pollingInProgress = false;
+    pollingInProgress =
+      false;
 
     if (username) {
       clearTimeout(
@@ -687,14 +796,22 @@ async function checkMessages() {
 }
 
 
+/* =========================
+   PUSH
+========================= */
+
 function base64ToUint8Array(
   base64String
 ) {
   const padding =
     '='.repeat(
-      (4 -
-        (base64String.length % 4)) %
-        4
+      (
+        4 -
+        (
+          base64String.length %
+          4
+        )
+      ) % 4
     );
 
   const base64 =
@@ -702,15 +819,23 @@ function base64ToUint8Array(
       base64String +
       padding
     )
-      .replace(/-/g, '+')
-      .replace(/_/g, '/');
+      .replace(
+        /-/g,
+        '+'
+      )
+      .replace(
+        /_/g,
+        '/'
+      );
 
   const rawData =
-    window.atob(base64);
+    window.atob(
+      base64
+    );
 
   return Uint8Array.from(
     [...rawData].map(
-      (char) =>
+      char =>
         char.charCodeAt(0)
     )
   );
@@ -746,41 +871,56 @@ async function enableNotifications() {
     window.matchMedia(
       '(display-mode: standalone)'
     ).matches ||
-    window.navigator.standalone === true;
+    window.navigator
+      .standalone === true;
 
   if (!standalone) {
     throw new Error(
-      'Сначала добавьте NCR Messenger на экран «Домой»'
+      'Добавьте приложение на экран «Домой»'
     );
   }
 
   const permission =
-    await Notification.requestPermission();
+    await Notification
+      .requestPermission();
 
-  if (permission !== 'granted') {
+  if (
+    permission !== 'granted'
+  ) {
     throw new Error(
       'Разрешение на уведомления не предоставлено'
     );
   }
 
   const registration =
-    await navigator.serviceWorker.ready;
+    await navigator
+      .serviceWorker
+      .ready;
 
   const config =
     await apiGetPushConfig();
 
-  const existing =
-    await registration.pushManager
-      .getSubscription();
+  if (
+    !config?.publicKey
+  ) {
+    throw new Error(
+      'VAPID public key не получен'
+    );
+  }
 
   let subscription =
-    existing;
+    await registration
+      .pushManager
+      .getSubscription();
 
   if (!subscription) {
     subscription =
-      await registration.pushManager
+      await registration
+        .pushManager
         .subscribe({
-          userVisibleOnly: true,
+          userVisibleOnly:
+            true,
+
           applicationServerKey:
             base64ToUint8Array(
               config.publicKey
@@ -793,12 +933,13 @@ async function enableNotifications() {
   );
 
   localStorage.setItem(
-    `ncr_push_enabled:${deviceId}`,
+    'ncr_push_enabled',
     '1'
   );
 
   $('notification-icon')
-    .textContent = '🔔';
+    .textContent =
+    '🔔';
 
   setStatus(
     'Уведомления включены'
@@ -808,10 +949,13 @@ async function enableNotifications() {
 
 async function disableNotifications() {
   const registration =
-    await navigator.serviceWorker.ready;
+    await navigator
+      .serviceWorker
+      .ready;
 
   const subscription =
-    await registration.pushManager
+    await registration
+      .pushManager
       .getSubscription();
 
   if (subscription) {
@@ -823,11 +967,12 @@ async function disableNotifications() {
   }
 
   localStorage.removeItem(
-    `ncr_push_enabled:${deviceId}`
+    'ncr_push_enabled'
   );
 
   $('notification-icon')
-    .textContent = '🔕';
+    .textContent =
+    '🔕';
 
   setStatus(
     'Уведомления выключены'
@@ -840,7 +985,9 @@ async function setupNotificationButton() {
     !('Notification' in window)
   ) {
     $('notification-btn')
-      .classList.add('hidden');
+      .classList.add(
+        'hidden'
+      );
 
     return;
   }
@@ -850,10 +997,12 @@ async function setupNotificationButton() {
     'granted'
   ) {
     $('notification-icon')
-      .textContent = '🔔';
+      .textContent =
+      '🔔';
   } else {
     $('notification-icon')
-      .textContent = '🔕';
+      .textContent =
+      '🔕';
   }
 }
 
@@ -865,7 +1014,8 @@ $('notification-btn')
       const button =
         $('notification-btn');
 
-      button.disabled = true;
+      button.disabled =
+        true;
 
       try {
         if (
@@ -887,16 +1037,21 @@ $('notification-btn')
           true
         );
       } finally {
-        button.disabled = false;
+        button.disabled =
+          false;
       }
     }
   );
 
 
+/* =========================
+   LOGIN
+========================= */
+
 $('login-form')
   .addEventListener(
     'submit',
-    async (event) => {
+    async event => {
       event.preventDefault();
 
       if (authInProgress) {
@@ -913,56 +1068,73 @@ $('login-form')
           .value;
 
       $('login-error')
-        .textContent = '';
+        .textContent =
+        '';
 
-      if (!name || !password) {
+      if (
+        !name ||
+        !password
+      ) {
         return;
       }
 
-      authInProgress = true;
-
-      $('login-btn').disabled =
+      authInProgress =
         true;
 
-      $('login-btn').textContent =
+      $('login-btn')
+        .disabled =
+        true;
+
+      $('login-btn')
+        .textContent =
         'Подключение…';
 
       try {
         deviceId =
           getDeviceId();
 
-        loadOrGenerateKeys(name);
+        loadOrGenerateKeys(
+          name
+        );
 
         await apiAuth(
           name,
           password,
-          publicKey,
-          deviceId
+          publicKey
         );
 
-        username = name;
+        username =
+          name;
 
         localStorage.setItem(
           'ncrlwe_last_username',
           name
         );
 
-        renderedMessageIds.clear();
+        renderedMessageIds
+          .clear();
 
-        $('messages').innerHTML = `
-          <div
-            id="empty-state"
-            class="empty-state"
-          >
-            <div class="empty-icon">✉</div>
-            <h2>Сообщений пока нет</h2>
-            <p>
-              Введите имя получателя
-              ниже и отправьте первое
-              сообщение.
-            </p>
-          </div>
-        `;
+        $('messages')
+          .innerHTML = `
+            <div
+              id="empty-state"
+              class="empty-state"
+            >
+              <div class="empty-icon">
+                ✉
+              </div>
+
+              <h2>
+                Сообщений пока нет
+              </h2>
+
+              <p>
+                Введите имя получателя
+                ниже и отправьте первое
+                сообщение.
+              </p>
+            </div>
+          `;
 
         showChat(name);
 
@@ -981,68 +1153,90 @@ $('login-form')
           .textContent =
           error.message;
       } finally {
-        authInProgress = false;
-
-        $('login-btn').disabled =
+        authInProgress =
           false;
 
-        $('login-btn').textContent =
+        $('login-btn')
+          .disabled =
+          false;
+
+        $('login-btn')
+          .textContent =
           'Войти / создать аккаунт';
       }
     }
   );
 
 
+/* =========================
+   LOGOUT
+========================= */
+
 $('logout-btn')
   .addEventListener(
     'click',
     () => {
-      username = null;
+      username =
+        null;
 
       clearTimeout(
         pollingTimer
       );
 
-      pollingTimer = null;
+      pollingTimer =
+        null;
 
-      pollingInProgress = false;
+      pollingInProgress =
+        false;
 
-      privateKey = null;
-      publicKey = null;
+      privateKey =
+        null;
 
-      renderedMessageIds.clear();
+      publicKey =
+        null;
 
-      $('messages').innerHTML = `
-        <div
-          id="empty-state"
-          class="empty-state"
-        >
-          <div class="empty-icon">✉</div>
+      renderedMessageIds
+        .clear();
 
-          <h2>
-            Сообщений пока нет
-          </h2>
+      $('messages')
+        .innerHTML = `
+          <div
+            id="empty-state"
+            class="empty-state"
+          >
+            <div class="empty-icon">
+              ✉
+            </div>
 
-          <p>
-            Введите имя получателя
-            ниже и отправьте первое
-            сообщение.
-          </p>
-        </div>
-      `;
+            <h2>
+              Сообщений пока нет
+            </h2>
+
+            <p>
+              Введите имя получателя
+              ниже и отправьте первое
+              сообщение.
+            </p>
+          </div>
+        `;
 
       $('login-error')
-        .textContent = '';
+        .textContent =
+        '';
 
       showLogin();
     }
   );
 
 
+/* =========================
+   SEND
+========================= */
+
 $('composer')
   .addEventListener(
     'submit',
-    (event) => {
+    event => {
       event.preventDefault();
 
       sendMessage();
@@ -1072,34 +1266,48 @@ async function sendMessage() {
     return;
   }
 
-  $('send-btn').disabled =
+  $('send-btn')
+    .disabled =
     true;
 
   setStatus(
-    'Шифрование и отправка…'
+    'Получение ключей устройств…'
   );
 
   try {
-    const recipientDevices =
-      await apiGetPublicKeys(
+    const data =
+      await apiGetPublicKey(
         recipient
       );
 
-    if (!recipientDevices.length) {
+    const devices =
+      Array.isArray(
+        data.devices
+      )
+        ? data.devices
+        : [];
+
+    if (
+      devices.length === 0
+    ) {
       throw new Error(
         'У получателя нет зарегистрированных устройств'
       );
     }
 
-    /*
-     * Одно и то же сообщение
-     * шифруется отдельно для каждого
-     * устройства получателя.
-     */
-    const payloads = [];
+    setStatus(
+      'Шифрование сообщения…'
+    );
 
+    const encrypted = [];
+
+    /*
+     * Каждому устройству
+     * отдельная криптографическая
+     * копия.
+     */
     for (
-      const device of recipientDevices
+      const device of devices
     ) {
       const {
         ciphertext,
@@ -1110,15 +1318,17 @@ async function sendMessage() {
         );
 
       const aesKey =
-        await deriveAesKey(K);
+        await deriveAesKey(
+          K
+        );
 
-      const encrypted =
+      const encryptedMessage =
         await encryptMessage(
           aesKey,
           message
         );
 
-      payloads.push({
+      encrypted.push({
         deviceId:
           device.deviceId,
 
@@ -1130,32 +1340,45 @@ async function sendMessage() {
             ciphertext.V,
 
           nonce:
-            encrypted.nonce,
+            encryptedMessage
+              .nonce,
 
           ciphertext:
-            encrypted.ciphertext
+            encryptedMessage
+              .ciphertext
         }
       });
     }
 
+    setStatus(
+      'Отправка…'
+    );
+
     const result =
       await apiSend(
         recipient,
-        payloads
+        encrypted
       );
 
     addMessage(
       message,
       {
         outgoing: true,
-        sender: username,
-        timestamp: Date.now(),
-        id: `${result.id}:outgoing`
+
+        sender:
+          username,
+
+        timestamp:
+          Date.now(),
+
+        id:
+          result.id
       }
     );
 
     $('message-input')
-      .value = '';
+      .value =
+      '';
 
     autoGrowTextarea();
 
@@ -1173,7 +1396,8 @@ async function sendMessage() {
       true
     );
   } finally {
-    $('send-btn').disabled =
+    $('send-btn')
+      .disabled =
       false;
 
     $('message-input')
@@ -1181,6 +1405,10 @@ async function sendMessage() {
   }
 }
 
+
+/* =========================
+   TEXTAREA
+========================= */
 
 function autoGrowTextarea() {
   const textarea =
@@ -1196,20 +1424,19 @@ function autoGrowTextarea() {
     )}px`;
 }
 
-
 $('message-input')
   .addEventListener(
     'input',
     autoGrowTextarea
   );
 
-
 $('message-input')
   .addEventListener(
     'keydown',
-    (event) => {
+    event => {
       if (
-        event.key === 'Enter' &&
+        event.key ===
+          'Enter' &&
         !event.shiftKey
       ) {
         event.preventDefault();
@@ -1219,6 +1446,10 @@ $('message-input')
     }
   );
 
+
+/* =========================
+   STARTUP
+========================= */
 
 deviceId =
   getDeviceId();
@@ -1230,28 +1461,21 @@ const lastUsername =
 
 if (lastUsername) {
   $('username-input')
-    .value = lastUsername;
+    .value =
+    lastUsername;
 }
 
 
 if (
-  'serviceWorker' in navigator
+  'serviceWorker' in
+  navigator
 ) {
   navigator.serviceWorker
     .register(
-      '/sw.js',
-      {
-        updateViaCache: 'none'
-      }
-    )
-    .then(
-      (registration) => {
-        registration.update()
-          .catch(() => {});
-      }
+      '/sw.js'
     )
     .catch(
-      (error) =>
+      error =>
         console.warn(
           'Service Worker:',
           error

@@ -6,6 +6,10 @@ import {
   requireSession
 } from '../../lib/security.js';
 
+import {
+  getVapidPublicKey
+} from '../../lib/push.js';
+
 export default async function handler(req, res) {
   securityHeaders(res);
   noStore(res);
@@ -28,26 +32,19 @@ export default async function handler(req, res) {
 
     if (!session) return;
 
-    const publicKey =
-      process.env.VAPID_PUBLIC_KEY;
-
-    if (!publicKey) {
-      return res.status(500).json({
-        error: 'Push не настроен'
-      });
-    }
-
     return res.status(200).json({
-      publicKey
+      publicKey:
+        getVapidPublicKey()
     });
   } catch (error) {
     console.error(
       'GET /api/push/config:',
-      error
+      error?.message || error
     );
 
     return res.status(500).json({
-      error: 'Ошибка push-конфигурации'
+      error:
+        'Push notifications are not configured'
     });
   }
 }

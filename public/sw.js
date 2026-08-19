@@ -7,18 +7,18 @@ const STATIC_ASSETS = [
   '/style.css',
   '/app.js',
   '/ncr-lwe.js',
-  '/manifest.json',
-  '/icon-192.png'
+  '/manifest.json'
 ];
-
 
 self.addEventListener(
   'install',
-  (event) => {
+  event => {
     event.waitUntil(
       caches
-        .open(CACHE_NAME)
-        .then((cache) =>
+        .open(
+          CACHE_NAME
+        )
+        .then(cache =>
           cache.addAll(
             STATIC_ASSETS
           )
@@ -33,19 +33,22 @@ self.addEventListener(
 
 self.addEventListener(
   'activate',
-  (event) => {
+  event => {
     event.waitUntil(
       caches
         .keys()
-        .then((keys) =>
+        .then(keys =>
           Promise.all(
             keys
               .filter(
-                (key) =>
-                  key !== CACHE_NAME
+                key =>
+                  key !==
+                  CACHE_NAME
               )
-              .map((key) =>
-                caches.delete(key)
+              .map(key =>
+                caches.delete(
+                  key
+                )
               )
           )
         )
@@ -57,33 +60,32 @@ self.addEventListener(
 );
 
 
-/*
- * Push notification.
- *
- * В push никогда не передаётся
- * текст сообщения.
- */
+/* =========================
+   PUSH
+========================= */
+
 self.addEventListener(
   'push',
-  (event) => {
+  event => {
     let data = {};
 
     try {
-      data = event.data
-        ? event.data.json()
-        : {};
+      data =
+        event.data
+          ? event.data.json()
+          : {};
     } catch {
       data = {};
     }
 
     const sender =
-      typeof data.sender === 'string'
+      typeof data.sender ===
+        'string'
         ? data.sender
         : 'Новое сообщение';
 
-    const messageId =
-      data.messageId ||
-      Date.now();
+    const title =
+      'NCR Messenger';
 
     const options = {
       body:
@@ -96,22 +98,28 @@ self.addEventListener(
         '/icon-192.png',
 
       tag:
-        `message-${messageId}`,
+        `message-${data.messageId || Date.now()}`,
 
-      renotify: true,
+      renotify:
+        true,
 
-      requireInteraction: false,
+      requireInteraction:
+        false,
 
       data: {
-        url: '/',
-        messageId
+        url:
+          data.url || '/',
+
+        messageId:
+          data.messageId ||
+          null
       }
     };
 
     event.waitUntil(
       self.registration
         .showNotification(
-          'NCR Messenger',
+          title,
           options
         )
         .then(async () => {
@@ -130,23 +138,27 @@ self.addEventListener(
 );
 
 
-/*
- * Пользователь нажал
- * на уведомление.
- */
+/* =========================
+   NOTIFICATION CLICK
+========================= */
+
 self.addEventListener(
   'notificationclick',
-  (event) => {
+  event => {
     event.notification.close();
 
     event.waitUntil(
       clients.matchAll({
-        type: 'window',
-        includeUncontrolled: true
+        type:
+          'window',
+
+        includeUncontrolled:
+          true
       })
-      .then((clientList) => {
+      .then(clientList => {
         for (
-          const client of clientList
+          const client of
+          clientList
         ) {
           if (
             'focus' in client
@@ -158,7 +170,11 @@ self.addEventListener(
         if (
           clients.openWindow
         ) {
-          return clients.openWindow('/');
+          return clients.openWindow(
+            event.notification
+              ?.data
+              ?.url || '/'
+          );
         }
 
         return undefined;
@@ -168,65 +184,80 @@ self.addEventListener(
 );
 
 
-/*
- * API никогда не кэшируем.
- */
+/* =========================
+   FETCH
+========================= */
+
 self.addEventListener(
   'fetch',
-  (event) => {
+  event => {
     const request =
       event.request;
 
     const url =
-      new URL(request.url);
+      new URL(
+        request.url
+      );
 
+    /*
+     * API никогда не кэшируем.
+     */
     if (
       url.origin ===
         self.location.origin &&
-      url.pathname.startsWith('/api/')
+      url.pathname.startsWith(
+        '/api/'
+      )
     ) {
       return;
     }
 
     if (
-      request.method !== 'GET'
+      request.method !==
+      'GET'
     ) {
       return;
     }
 
     /*
-     * HTML / JS / CSS всегда
-     * сначала пробуем получить
-     * свежую версию с сервера.
+     * HTML и JS сначала
+     * пытаемся получить
+     * из сети.
+     *
+     * Это важно для обновления
+     * приложения на iPhone.
      */
     if (
-      request.destination === 'document' ||
-      url.pathname.endsWith('.js') ||
-      url.pathname.endsWith('.css')
+      request.destination ===
+        'document' ||
+      request.destination ===
+        'script'
     ) {
       event.respondWith(
-        fetch(request, {
-          cache: 'no-store'
-        })
-        .then((response) => {
-          const copy =
-            response.clone();
+        fetch(request)
+          .then(response => {
+            const copy =
+              response.clone();
 
-          caches
-            .open(CACHE_NAME)
-            .then((cache) =>
-              cache.put(
-                request,
-                copy
+            caches
+              .open(
+                CACHE_NAME
               )
-            )
-            .catch(() => {});
+              .then(cache =>
+                cache.put(
+                  request,
+                  copy
+                )
+              )
+              .catch(() => {});
 
-          return response;
-        })
-        .catch(() =>
-          caches.match(request)
-        )
+            return response;
+          })
+          .catch(() =>
+            caches.match(
+              request
+            )
+          )
       );
 
       return;
@@ -234,13 +265,15 @@ self.addEventListener(
 
     event.respondWith(
       fetch(request)
-        .then((response) => {
+        .then(response => {
           const copy =
             response.clone();
 
           caches
-            .open(CACHE_NAME)
-            .then((cache) =>
+            .open(
+              CACHE_NAME
+            )
+            .then(cache =>
               cache.put(
                 request,
                 copy
@@ -251,7 +284,9 @@ self.addEventListener(
           return response;
         })
         .catch(() =>
-          caches.match(request)
+          caches.match(
+            request
+          )
         )
     );
   }

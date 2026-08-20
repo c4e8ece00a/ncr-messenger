@@ -1,8 +1,6 @@
 import crypto from 'node:crypto';
 
-import {
-  getRedis
-} from '../../lib/redis.js';
+import { getRedis } from '../../lib/redis.js';
 
 import {
   securityHeaders,
@@ -12,33 +10,21 @@ import {
   jsonBodySize
 } from '../../lib/security.js';
 
-export default async function handler(
-  req,
-  res
-) {
+export default async function handler(req, res) {
   securityHeaders(res);
   noStore(res);
 
   if (req.method !== 'POST') {
     return res.status(405).json({
-      error:
-        'Method not allowed'
+      error: 'Method not allowed'
     });
   }
 
-  if (
-    !requireSameOrigin(
-      req,
-      res
-    )
-  ) {
+  if (!requireSameOrigin(req, res)) {
     return;
   }
 
-  if (
-    jsonBodySize(req) >
-    8 * 1024
-  ) {
+  if (jsonBodySize(req) > 8 * 1024) {
     return res.status(413).json({
       error:
         'Слишком большой запрос'
@@ -46,8 +32,7 @@ export default async function handler(
   }
 
   try {
-    const redis =
-      getRedis();
+    const redis = getRedis();
 
     const session =
       await requireSession(
@@ -56,12 +41,13 @@ export default async function handler(
         redis
       );
 
-    if (!session) return;
+    if (!session) {
+      return;
+    }
 
     const endpoint =
       String(
-        req.body?.endpoint ||
-          ''
+        req.body?.endpoint || ''
       );
 
     if (!endpoint) {
@@ -84,7 +70,7 @@ export default async function handler(
       await redis.get(key);
 
     if (raw) {
-      let stored;
+      let stored = null;
 
       try {
         stored =
@@ -97,9 +83,7 @@ export default async function handler(
 
       if (
         stored?.username ===
-          session.username &&
-        stored?.deviceId ===
-          session.deviceId
+        session.username
       ) {
         await redis.del(key);
       }
@@ -109,11 +93,12 @@ export default async function handler(
       status:
         'unsubscribed'
     });
+
   } catch (error) {
     console.error(
       'POST /api/push/unsubscribe:',
       error?.message ||
-        error
+      error
     );
 
     return res.status(500).json({

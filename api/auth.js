@@ -1,18 +1,13 @@
-import {
-  hash,
-  verify
-} from '@node-rs/argon2';
+import crypto from 'node:crypto';
+import { hash, verify } from '@node-rs/argon2';
 
-import {
-  getRedis
-} from '../lib/redis.js';
+import { getRedis } from '../lib/redis.js';
 
 import {
   MAX_PASSWORD_LENGTH,
   normalizeUsername,
   validUsername,
   newToken,
-  newDeviceId,
   sha256,
   setSessionCookie,
   noStore,
@@ -22,10 +17,26 @@ import {
   securityHeaders
 } from '../lib/security.js';
 
+
 const SESSION_TTL =
   60 * 60 * 24 * 30;
 
-const MIN_PASSWORD_LENGTH = 8;
+const MIN_PASSWORD_LENGTH =
+  8;
+
+
+/*
+ * Создаём уникальный идентификатор
+ * конкретного устройства.
+ *
+ * Он НЕ является секретом.
+ * Он нужен для привязки Push-подписки
+ * к конкретному устройству.
+ */
+function createDeviceId() {
+  return crypto.randomUUID();
+}
+
 
 function genericAuthError(res) {
   return res.status(401).json({
@@ -34,28 +45,27 @@ function genericAuthError(res) {
   });
 }
 
-function validDeviceId(value) {
-  return (
-    typeof value === 'string' &&
-    /^[0-9a-f-]{36}$/i.test(value)
+
+async function createPasswordHash(password) {
+  return hash(
+    password,
+    {
+      algorithm: 'argon2id',
+
+      memoryCost: 19456,
+
+      timeCost: 2,
+
+      parallelism: 1
+    }
   );
 }
 
-function validPublicKey(key) {
-  return (
-    key &&
-    typeof key === 'object' &&
-    Array.isArray(key.A) &&
-    Array.isArray(key.B)
-  );
-}
 
-export default async function handler(
-  req,
-  res
-) {
+export default async function handler(req, res) {
   securityHeaders(res);
   noStore(res);
+
 
   if (req.method !== 'POST') {
     return res.status(405).json({
@@ -64,52 +74,44 @@ export default async function handler(
     });
   }
 
-  if (
-    !requireSameOrigin(
-      req,
-      res
-    )
-  ) {
+
+  if (!requireSameOrigin(req, res)) {
     return;
   }
 
-  if (
-    jsonBodySize(req) >
-    16 * 1024
-  ) {
+
+  if (jsonBodySize(req) > 16 * 1024) {
     return res.status(413).json({
       error:
         'Слишком большой запрос'
     });
   }
 
+
   try {
     const body =
       req.body || {};
+
 
     const username =
       normalizeUsername(
         body.username
       );
 
+
     const password =
       String(
         body.password ?? ''
       );
 
+
     const publicKey =
       body.publicKey;
 
-    let deviceId =
-      body.deviceId;
 
-    if (
-      !validDeviceId(deviceId)
-    ) {
-      deviceId =
-        newDeviceId();
-    }
-
+    /*
+     * Проверяем входные данные.
+     */
     if (
       !validUsername(username) ||
       password.length <
@@ -120,30 +122,33 @@ export default async function handler(
       return genericAuthError(res);
     }
 
-    if (
-      !validPublicKey(publicKey)
-    ) {
-      return res.status(400).json({
-        error:
-          'Некорректный ключ устройства'
-      });
-    }
 
     const redis =
       getRedis();
 
+
+    /*
+     * Ограничение количества
+     * попыток авторизации.
+     */
     const ip =
       req.headers[
         'x-forwarded-for'
-      ] || 'unknown';
+      ] ||
+      'unknown';
+
 
     const rl =
       await rateLimit(
         redis,
+
         `login:${username}:${ip}`,
+
         5,
+
         300
       );
+
 
     if (!rl.allowed) {
       return res.status(429).json({
@@ -152,150 +157,301 @@ export default async function handler(
       });
     }
 
+
     const userKey =
       `user:${username}`;
+
 
     const existing =
       await redis.get(
         userKey
       );
 
+
+    /*
+     * =========================================
+     * НОВЫЙ ПОЛЬЗОВАТЕЛЬ
+     * =========================================
+     */
     if (!existing) {
+
+      if (
+        !publicKey ||
+        typeof publicKey !==
+          'object'
+      ) {
+        return res.status(400).json({
+          error:
+            'Для нового аккаунта требуется publicKey'
+        });
+      }
+
+
       const passwordHash =
-        await hash(
-          password,
-          {
-            algorithm:
-              'argon2id',
-            memoryCost:
-              19456,
-            timeCost: 2,
-            parallelism: 1
-          }
+        await createPasswordHash(
+          password
         );
+
 
       await redis.set(
         userKey,
+
         JSON.stringify({
           username,
+
           passwordHash,
+
           createdAt:
             Date.now()
         })
       );
+
+
+      /*
+       * Публичный ключ шифрования
+       * пользователя сохраняется
+       * отдельно от его пароля.
+       */
+      await redis.set(
+        `publicKey:${username}`,
+
+        publicKey
+      );
+
     } else {
-      const user =
-        typeof existing === 'string'
-          ? JSON.parse(existing)
-          : existing;
 
-      let valid = false;
+      /*
+       * =========================================
+       * СУЩЕСТВУЮЩИЙ ПОЛЬЗОВАТЕЛЬ
+       * =========================================
+       */
 
+      let user;
+
+
+      try {
+        user =
+          typeof existing ===
+            'string'
+            ? JSON.parse(existing)
+            : existing;
+
+      } catch {
+        return genericAuthError(res);
+      }
+
+
+      let valid =
+        false;
+
+
+      /*
+       * Основной вариант —
+       * Argon2id.
+       */
       if (
         user?.passwordHash
       ) {
-        valid =
-          await verify(
-            user.passwordHash,
-            password
+        try {
+          valid =
+            await verify(
+              user.passwordHash,
+              password
+            );
+
+        } catch (verifyError) {
+          /*
+           * Если старый hash имеет
+           * неподдерживаемый формат,
+           * ниже попробуем legacy SHA-256.
+           */
+          console.error(
+            'Password verification:',
+            verifyError?.message ||
+            verifyError
           );
+
+          valid = false;
+        }
       }
 
+
+      /*
+       * =========================================
+       * LEGACY SHA-256 MIGRATION
+       * =========================================
+       *
+       * Старые аккаунты могут иметь:
+       *
+       * sha256:<hash>
+       *
+       * При успешном входе сразу
+       * переводим пароль на Argon2id.
+       */
       if (
         !valid &&
-        user?.passwordHash?.startsWith(
+        typeof user?.passwordHash ===
+          'string' &&
+        user.passwordHash.startsWith(
           'sha256:'
         )
       ) {
+
         const legacy =
           sha256(password);
+
 
         if (
           legacy ===
           user.passwordHash.slice(7)
         ) {
+
           const upgraded =
-            await hash(
-              password,
-              {
-                algorithm:
-                  'argon2id',
-                memoryCost:
-                  19456,
-                timeCost: 2,
-                parallelism: 1
-              }
+            await createPasswordHash(
+              password
             );
+
 
           user.passwordHash =
             upgraded;
 
+
           await redis.set(
             userKey,
-            JSON.stringify(user)
+
+            JSON.stringify(
+              user
+            )
           );
+
 
           valid = true;
         }
       }
 
+
       if (!valid) {
-        return genericAuthError(
-          res
-        );
+        return genericAuthError(res);
+      }
+
+
+      /*
+       * Не заменяем существующий
+       * публичный ключ пользователя.
+       *
+       * Это важно для E2E-шифрования.
+       */
+      if (publicKey) {
+
+        const storedKey =
+          await redis.get(
+            `publicKey:${username}`
+          );
+
+
+        if (!storedKey) {
+
+          await redis.set(
+            `publicKey:${username}`,
+
+            publicKey
+          );
+        }
       }
     }
 
+
     /*
-     * Регистрируем public key
-     * конкретного устройства.
+     * =========================================
+     * DEVICE ID
+     * =========================================
+     *
+     * Каждый успешный вход получает
+     * собственный deviceId.
+     *
+     * Поэтому один аккаунт может иметь:
+     *
+     * iPhone  -> device A
+     * iPad    -> device B
+     * Browser -> device C
+     *
+     * Каждая Push-подписка будет
+     * привязана к своему устройству.
      */
-    await redis.set(
-      `device:${username}:${deviceId}`,
-      JSON.stringify({
-        username,
-        deviceId,
-        publicKey,
-        createdAt:
-          Date.now(),
-        updatedAt:
-          Date.now()
-      })
-    );
+    const deviceId =
+      createDeviceId();
+
+
+    /*
+     * =========================================
+     * SESSION
+     * =========================================
+     */
 
     const token =
       newToken(32);
 
+
+    const tokenHash =
+      sha256(token);
+
+
+    const session = {
+      username,
+
+      deviceId,
+
+      createdAt:
+        Date.now()
+    };
+
+
     await redis.set(
-      `session:${sha256(token)}`,
-      JSON.stringify({
-        username,
-        deviceId,
-        createdAt:
-          Date.now()
-      }),
+      `session:${tokenHash}`,
+
+      JSON.stringify(
+        session
+      ),
+
       {
-        ex: SESSION_TTL
+        ex:
+          SESSION_TTL
       }
     );
 
+
     setSessionCookie(
       res,
+
       token,
+
       SESSION_TTL
     );
 
+
+    /*
+     * Клиенту deviceId обычно
+     * не нужно возвращать.
+     *
+     * Он уже находится
+     * внутри серверной сессии.
+     */
     return res.status(200).json({
-      status: 'ok',
-      username,
-      deviceId
+      status:
+        'ok',
+
+      username
     });
+
   } catch (error) {
+
     console.error(
       'POST /api/auth:',
+
       error?.message ||
-        error
+      error
     );
+
 
     return res.status(500).json({
       error:

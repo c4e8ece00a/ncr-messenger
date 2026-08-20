@@ -1,8 +1,6 @@
 import crypto from 'node:crypto';
 
-import {
-  getRedis
-} from '../../lib/redis.js';
+import { getRedis } from '../../lib/redis.js';
 
 import {
   securityHeaders,
@@ -12,33 +10,21 @@ import {
   jsonBodySize
 } from '../../lib/security.js';
 
-export default async function handler(
-  req,
-  res
-) {
+export default async function handler(req, res) {
   securityHeaders(res);
   noStore(res);
 
   if (req.method !== 'POST') {
     return res.status(405).json({
-      error:
-        'Method not allowed'
+      error: 'Method not allowed'
     });
   }
 
-  if (
-    !requireSameOrigin(
-      req,
-      res
-    )
-  ) {
+  if (!requireSameOrigin(req, res)) {
     return;
   }
 
-  if (
-    jsonBodySize(req) >
-    16 * 1024
-  ) {
+  if (jsonBodySize(req) > 16 * 1024) {
     return res.status(413).json({
       error:
         'Слишком большой запрос'
@@ -46,8 +32,7 @@ export default async function handler(
   }
 
   try {
-    const redis =
-      getRedis();
+    const redis = getRedis();
 
     const session =
       await requireSession(
@@ -56,15 +41,23 @@ export default async function handler(
         redis
       );
 
-    if (!session) return;
+    if (!session) {
+      return;
+    }
+
+    if (!session.deviceId) {
+      return res.status(400).json({
+        error:
+          'Сессия не привязана к устройству'
+      });
+    }
 
     const subscription =
       req.body?.subscription;
 
     if (
       !subscription ||
-      typeof subscription !==
-        'object'
+      typeof subscription !== 'object'
     ) {
       return res.status(400).json({
         error:
@@ -85,12 +78,9 @@ export default async function handler(
 
     if (
       !subscription.keys ||
-      typeof subscription.keys !==
-        'object' ||
-      typeof subscription.keys.p256dh !==
-        'string' ||
-      typeof subscription.keys.auth !==
-        'string'
+      typeof subscription.keys !== 'object' ||
+      typeof subscription.keys.p256dh !== 'string' ||
+      typeof subscription.keys.auth !== 'string'
     ) {
       return res.status(400).json({
         error:
@@ -98,32 +88,10 @@ export default async function handler(
       });
     }
 
-    /*
-     * Проверяем, что устройство
-     * действительно зарегистрировано
-     * у текущего аккаунта.
-     */
-    const deviceKey =
-      `device:${session.username}:${session.deviceId}`;
-
-    const deviceRaw =
-      await redis.get(
-        deviceKey
-      );
-
-    if (!deviceRaw) {
-      return res.status(400).json({
-        error:
-          'Устройство не зарегистрировано'
-      });
-    }
-
     const endpointHash =
       crypto
         .createHash('sha256')
-        .update(
-          subscription.endpoint
-        )
+        .update(subscription.endpoint)
         .digest('hex');
 
     const key =
@@ -138,6 +106,9 @@ export default async function handler(
         deviceId:
           session.deviceId,
 
+        endpoint:
+          subscription.endpoint,
+
         subscription,
 
         updatedAt:
@@ -147,13 +118,17 @@ export default async function handler(
 
     return res.status(200).json({
       status:
-        'subscribed'
+        'subscribed',
+
+      deviceId:
+        session.deviceId
     });
+
   } catch (error) {
     console.error(
       'POST /api/push/subscribe:',
       error?.message ||
-        error
+      error
     );
 
     return res.status(500).json({

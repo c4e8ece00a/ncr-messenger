@@ -1,64 +1,35 @@
 let username = null;
-
 let privateKey = null;
 let publicKey = null;
-
-let deviceId = null;
 
 let pollingTimer = null;
 let pollingInProgress = false;
 let authInProgress = false;
+let notificationInProgress = false;
 
-const renderedMessageIds =
-  new Set();
+const renderedMessageIds = new Set();
 
 const $ = (id) =>
   document.getElementById(id);
 
 
-/* =========================
-   DEVICE
-========================= */
-
-function getDeviceId() {
-  const key =
-    'ncr_device_id';
-
-  let id =
-    localStorage.getItem(key);
-
-  if (!id) {
-    id =
-      crypto.randomUUID();
-
-    localStorage.setItem(
-      key,
-      id
-    );
-  }
-
-  return id;
-}
-
-
-/* =========================
-   KEYS
-========================= */
+/*
+ * ==========================================
+ * LOCAL KEY STORAGE
+ * ==========================================
+ */
 
 function keyStorageName(name) {
-  return `ncrlwe_keys:${name}:${deviceId}`;
+  return `ncrlwe_keys:${name}`;
 }
 
-function loadOrGenerateKeys(
-  name
-) {
+
+function loadOrGenerateKeys(name) {
   const storageKey =
     keyStorageName(name);
 
   const stored =
-    localStorage.getItem(
-      storageKey
-    );
+    localStorage.getItem(storageKey);
 
   if (stored) {
     try {
@@ -103,9 +74,11 @@ function loadOrGenerateKeys(
 }
 
 
-/* =========================
-   AES
-========================= */
+/*
+ * ==========================================
+ * AES-GCM
+ * ==========================================
+ */
 
 async function deriveAesKey(K) {
   const bytes =
@@ -130,6 +103,7 @@ async function deriveAesKey(K) {
     ]
   );
 }
+
 
 async function encryptMessage(
   aesKey,
@@ -161,12 +135,11 @@ async function encryptMessage(
 
     ciphertext:
       Array.from(
-        new Uint8Array(
-          ciphertext
-        )
+        new Uint8Array(ciphertext)
       )
   };
 }
+
 
 async function decryptMessage(
   aesKey,
@@ -178,14 +151,10 @@ async function decryptMessage(
       {
         name: 'AES-GCM',
         iv:
-          new Uint8Array(
-            nonce
-          )
+          new Uint8Array(nonce)
       },
       aesKey,
-      new Uint8Array(
-        ciphertext
-      )
+      new Uint8Array(ciphertext)
     );
 
   return new TextDecoder()
@@ -193,13 +162,13 @@ async function decryptMessage(
 }
 
 
-/* =========================
-   API
-========================= */
+/*
+ * ==========================================
+ * HTTP HELPERS
+ * ==========================================
+ */
 
-async function readJsonResponse(
-  res
-) {
+async function readJsonResponse(res) {
   const text =
     await res.text();
 
@@ -210,7 +179,9 @@ async function readJsonResponse(
       text
         ? JSON.parse(text)
         : {};
-  } catch {}
+  } catch {
+    data = {};
+  }
 
   if (!res.ok) {
     throw new Error(
@@ -223,6 +194,12 @@ async function readJsonResponse(
 }
 
 
+/*
+ * ==========================================
+ * AUTH API
+ * ==========================================
+ */
+
 async function apiAuth(
   name,
   password,
@@ -234,12 +211,11 @@ async function apiAuth(
       {
         method: 'POST',
         cache: 'no-store',
-
+        credentials: 'same-origin',
         headers: {
           'Content-Type':
             'application/json'
         },
-
         body:
           JSON.stringify({
             username:
@@ -248,22 +224,22 @@ async function apiAuth(
             password,
 
             publicKey:
-              key,
-
-            deviceId
+              key
           })
       }
     );
 
-  return readJsonResponse(
-    res
-  );
+  return readJsonResponse(res);
 }
 
 
-async function apiGetPublicKey(
-  name
-) {
+/*
+ * ==========================================
+ * PUBLIC KEY API
+ * ==========================================
+ */
+
+async function apiGetPublicKey(name) {
   const url =
     `/api/publicKey?username=${encodeURIComponent(name)}&_=${Date.now()}`;
 
@@ -272,19 +248,27 @@ async function apiGetPublicKey(
       url,
       {
         method: 'GET',
-        cache: 'no-store'
+        cache: 'no-store',
+        credentials: 'same-origin'
       }
     );
 
-  return readJsonResponse(
-    res
-  );
+  const data =
+    await readJsonResponse(res);
+
+  return data.publicKey;
 }
 
 
+/*
+ * ==========================================
+ * SEND MESSAGE API
+ * ==========================================
+ */
+
 async function apiSend(
   recipient,
-  encrypted
+  payload
 ) {
   const res =
     await fetch(
@@ -292,27 +276,36 @@ async function apiSend(
       {
         method: 'POST',
         cache: 'no-store',
-
+        credentials: 'same-origin',
         headers: {
           'Content-Type':
             'application/json'
         },
-
         body:
           JSON.stringify({
             recipient,
-            encrypted
+            payload
           })
       }
     );
 
-  return readJsonResponse(
-    res
-  );
+  return readJsonResponse(res);
 }
 
 
+/*
+ * ==========================================
+ * MESSAGES API
+ * ==========================================
+ */
+
 async function apiGetMessages() {
+  if (!username) {
+    throw new Error(
+      'Пользователь не авторизован'
+    );
+  }
+
   const url =
     `/api/messages?username=${encodeURIComponent(username)}&_=${Date.now()}`;
 
@@ -321,15 +314,20 @@ async function apiGetMessages() {
       url,
       {
         method: 'GET',
-        cache: 'no-store'
+        cache: 'no-store',
+        credentials: 'same-origin'
       }
     );
 
-  return readJsonResponse(
-    res
-  );
+  return readJsonResponse(res);
 }
 
+
+/*
+ * ==========================================
+ * PUSH CONFIG API
+ * ==========================================
+ */
 
 async function apiGetPushConfig() {
   const res =
@@ -337,15 +335,20 @@ async function apiGetPushConfig() {
       '/api/push/config',
       {
         method: 'GET',
-        cache: 'no-store'
+        cache: 'no-store',
+        credentials: 'same-origin'
       }
     );
 
-  return readJsonResponse(
-    res
-  );
+  return readJsonResponse(res);
 }
 
+
+/*
+ * ==========================================
+ * PUSH SUBSCRIBE API
+ * ==========================================
+ */
 
 async function apiSubscribePush(
   subscription
@@ -356,12 +359,11 @@ async function apiSubscribePush(
       {
         method: 'POST',
         cache: 'no-store',
-
+        credentials: 'same-origin',
         headers: {
           'Content-Type':
             'application/json'
         },
-
         body:
           JSON.stringify({
             subscription
@@ -369,11 +371,15 @@ async function apiSubscribePush(
       }
     );
 
-  return readJsonResponse(
-    res
-  );
+  return readJsonResponse(res);
 }
 
+
+/*
+ * ==========================================
+ * PUSH UNSUBSCRIBE API
+ * ==========================================
+ */
 
 async function apiUnsubscribePush(
   endpoint
@@ -384,12 +390,11 @@ async function apiUnsubscribePush(
       {
         method: 'POST',
         cache: 'no-store',
-
+        credentials: 'same-origin',
         headers: {
           'Content-Type':
             'application/json'
         },
-
         body:
           JSON.stringify({
             endpoint
@@ -397,30 +402,36 @@ async function apiUnsubscribePush(
       }
     );
 
-  return readJsonResponse(
-    res
-  );
+  return readJsonResponse(res);
 }
 
 
-/* =========================
-   UI
-========================= */
+/*
+ * ==========================================
+ * UI
+ * ==========================================
+ */
 
 function setStatus(
   text,
   isError = false
 ) {
-  $('status-bar')
-    .textContent =
+  const status =
+    $('status-bar');
+
+  if (!status) {
+    return;
+  }
+
+  status.textContent =
     text || '';
 
-  $('status-bar')
-    .classList.toggle(
-      'error',
-      isError
-    );
+  status.classList.toggle(
+    'error',
+    isError
+  );
 }
+
 
 function showChat(name) {
   $('current-user')
@@ -448,6 +459,7 @@ function showChat(name) {
   );
 }
 
+
 function showLogin() {
   $('chat-screen')
     .classList.add(
@@ -460,9 +472,8 @@ function showLogin() {
     );
 }
 
-function formatTime(
-  timestamp
-) {
+
+function formatTime(timestamp) {
   if (!timestamp) {
     return '';
   }
@@ -472,20 +483,21 @@ function formatTime(
     {
       hour:
         '2-digit',
+
       minute:
         '2-digit'
     }
   ).format(
-    new Date(
-      timestamp
-    )
+    new Date(timestamp)
   );
 }
 
 
-/* =========================
-   MESSAGES
-========================= */
+/*
+ * ==========================================
+ * MESSAGE RENDERING
+ * ==========================================
+ */
 
 function addMessage(
   text,
@@ -504,9 +516,7 @@ function addMessage(
   }
 
   if (id) {
-    renderedMessageIds.add(
-      id
-    );
+    renderedMessageIds.add(id);
   }
 
   const empty =
@@ -604,21 +614,38 @@ function addMessage(
 }
 
 
-/* =========================
-   DECRYPT
-========================= */
+/*
+ * ==========================================
+ * MESSAGE DECRYPTION
+ * ==========================================
+ */
 
 async function processIncomingMessage(
   payload
 ) {
   if (
-    !payload?.U ||
-    !payload?.V ||
-    !payload?.nonce ||
-    !payload?.ciphertext
+    !payload ||
+    typeof payload !== 'object'
   ) {
     throw new Error(
       'Повреждённый пакет сообщения'
+    );
+  }
+
+  if (
+    !payload.U ||
+    !payload.V ||
+    !payload.nonce ||
+    !payload.ciphertext
+  ) {
+    throw new Error(
+      'Повреждённый пакет сообщения'
+    );
+  }
+
+  if (!privateKey) {
+    throw new Error(
+      'Приватный ключ отсутствует'
     );
   }
 
@@ -635,19 +662,24 @@ async function processIncomingMessage(
     );
 
   const aesKey =
-    await deriveAesKey(K);
+    await deriveAesKey(
+      K
+    );
 
   const plaintext =
     await decryptMessage(
       aesKey,
+
       payload.nonce,
+
       payload.ciphertext
     );
 
   addMessage(
     plaintext,
     {
-      outgoing: false,
+      outgoing:
+        false,
 
       sender:
         payload.sender ||
@@ -663,9 +695,11 @@ async function processIncomingMessage(
 }
 
 
-/* =========================
-   HISTORY
-========================= */
+/*
+ * ==========================================
+ * HISTORY
+ * ==========================================
+ */
 
 async function loadHistory() {
   if (!username) {
@@ -691,12 +725,17 @@ async function loadHistory() {
           payload
         );
       } catch (error) {
+        /*
+         * История не должна ломать
+         * подключение всего чата.
+         */
         console.error(
           'History decrypt error:',
           error
         );
       }
     }
+
   } catch (error) {
     console.error(
       'History error:',
@@ -711,9 +750,11 @@ async function loadHistory() {
 }
 
 
-/* =========================
-   POLLING
-========================= */
+/*
+ * ==========================================
+ * POLLING
+ * ==========================================
+ */
 
 async function checkMessages() {
   if (
@@ -737,11 +778,25 @@ async function checkMessages() {
         ? data.messages
         : [];
 
-    let failed = 0;
+    let failed =
+      0;
 
     for (
       const payload of messages
     ) {
+      /*
+       * Уже отображённые сообщения
+       * повторно расшифровывать не нужно.
+       */
+      if (
+        payload?.id &&
+        renderedMessageIds.has(
+          payload.id
+        )
+      ) {
+        continue;
+      }
+
       try {
         await processIncomingMessage(
           payload
@@ -757,7 +812,13 @@ async function checkMessages() {
       }
     }
 
-    if (failed) {
+    /*
+     * Ошибка расшифровки показывается
+     * только если действительно было
+     * сообщение, которое не удалось
+     * расшифровать.
+     */
+    if (failed > 0) {
       setStatus(
         `Не удалось расшифровать: ${failed}`,
         true
@@ -767,6 +828,7 @@ async function checkMessages() {
         'Подключено'
       );
     }
+
   } catch (error) {
     console.error(
       'Polling error:',
@@ -777,6 +839,7 @@ async function checkMessages() {
       `Ошибка связи: ${error.message}`,
       true
     );
+
   } finally {
     pollingInProgress =
       false;
@@ -796,13 +859,24 @@ async function checkMessages() {
 }
 
 
-/* =========================
-   PUSH
-========================= */
+/*
+ * ==========================================
+ * BASE64URL
+ * ==========================================
+ */
 
 function base64ToUint8Array(
   base64String
 ) {
+  if (
+    typeof base64String !==
+    'string'
+  ) {
+    throw new Error(
+      'Некорректный VAPID public key'
+    );
+  }
+
   const padding =
     '='.repeat(
       (
@@ -835,119 +909,190 @@ function base64ToUint8Array(
 
   return Uint8Array.from(
     [...rawData].map(
-      char =>
+      (char) =>
         char.charCodeAt(0)
     )
   );
 }
 
 
-async function enableNotifications() {
-  if (
-    !('serviceWorker' in navigator)
-  ) {
-    throw new Error(
-      'Service Worker не поддерживается'
-    );
-  }
+/*
+ * ==========================================
+ * PUSH / PWA DETECTION
+ * ==========================================
+ */
 
-  if (
-    !('PushManager' in window)
-  ) {
-    throw new Error(
-      'Push API не поддерживается'
-    );
-  }
-
-  if (
-    !('Notification' in window)
-  ) {
-    throw new Error(
-      'Notifications API не поддерживается'
-    );
-  }
-
-  const standalone =
+function isStandaloneMode() {
+  return (
     window.matchMedia(
       '(display-mode: standalone)'
     ).matches ||
-    window.navigator
-      .standalone === true;
-
-  if (!standalone) {
-    throw new Error(
-      'Добавьте приложение на экран «Домой»'
-    );
-  }
-
-  const permission =
-    await Notification
-      .requestPermission();
-
-  if (
-    permission !== 'granted'
-  ) {
-    throw new Error(
-      'Разрешение на уведомления не предоставлено'
-    );
-  }
-
-  const registration =
-    await navigator
-      .serviceWorker
-      .ready;
-
-  const config =
-    await apiGetPushConfig();
-
-  if (
-    !config?.publicKey
-  ) {
-    throw new Error(
-      'VAPID public key не получен'
-    );
-  }
-
-  let subscription =
-    await registration
-      .pushManager
-      .getSubscription();
-
-  if (!subscription) {
-    subscription =
-      await registration
-        .pushManager
-        .subscribe({
-          userVisibleOnly:
-            true,
-
-          applicationServerKey:
-            base64ToUint8Array(
-              config.publicKey
-            )
-        });
-  }
-
-  await apiSubscribePush(
-    subscription.toJSON()
-  );
-
-  localStorage.setItem(
-    'ncr_push_enabled',
-    '1'
-  );
-
-  $('notification-icon')
-    .textContent =
-    '🔔';
-
-  setStatus(
-    'Уведомления включены'
+    window.navigator.standalone === true
   );
 }
 
 
+function pushSupported() {
+  return (
+    'serviceWorker' in
+      navigator &&
+    'PushManager' in
+      window &&
+    'Notification' in
+      window
+  );
+}
+
+
+/*
+ * ==========================================
+ * ENABLE NOTIFICATIONS
+ * ==========================================
+ */
+
+async function enableNotifications() {
+  if (!pushSupported()) {
+    throw new Error(
+      'Push-уведомления не поддерживаются этим браузером'
+    );
+  }
+
+  /*
+   * Для iPhone/iPad Push Web App
+   * должен быть установлен на экран
+   * «Домой».
+   */
+  if (!isStandaloneMode()) {
+    throw new Error(
+      'Для уведомлений на iPhone сначала добавьте NCR Messenger на экран «Домой» и откройте приложение оттуда'
+    );
+  }
+
+  if (notificationInProgress) {
+    return;
+  }
+
+  notificationInProgress =
+    true;
+
+  try {
+    /*
+     * Запрашиваем разрешение.
+     */
+    let permission =
+      Notification.permission;
+
+    if (
+      permission !==
+      'granted'
+    ) {
+      permission =
+        await Notification.requestPermission();
+    }
+
+    if (
+      permission !==
+      'granted'
+    ) {
+      throw new Error(
+        'Разрешение на уведомления не предоставлено'
+      );
+    }
+
+    /*
+     * Ждём активный Service Worker.
+     */
+    const registration =
+      await navigator
+        .serviceWorker
+        .ready;
+
+    /*
+     * Получаем VAPID public key.
+     */
+    const config =
+      await apiGetPushConfig();
+
+    if (
+      !config?.publicKey
+    ) {
+      throw new Error(
+        'Сервер не вернул VAPID public key'
+      );
+    }
+
+    /*
+     * Проверяем существующую
+     * Push-подписку этого устройства.
+     */
+    let subscription =
+      await registration
+        .pushManager
+        .getSubscription();
+
+    /*
+     * Если подписки нет —
+     * создаём новую.
+     */
+    if (!subscription) {
+      subscription =
+        await registration
+          .pushManager
+          .subscribe({
+            userVisibleOnly:
+              true,
+
+            applicationServerKey:
+              base64ToUint8Array(
+                config.publicKey
+              )
+          });
+    }
+
+    /*
+     * Регистрируем subscription
+     * на сервере.
+     *
+     * Сервер привяжет её к текущей
+     * session.deviceId.
+     */
+    await apiSubscribePush(
+      subscription.toJSON()
+    );
+
+    localStorage.setItem(
+      'ncr_push_enabled',
+      '1'
+    );
+
+    $('notification-icon')
+      .textContent =
+      '🔔';
+
+    setStatus(
+      'Уведомления включены'
+    );
+
+  } finally {
+    notificationInProgress =
+      false;
+  }
+}
+
+
+/*
+ * ==========================================
+ * DISABLE NOTIFICATIONS
+ * ==========================================
+ */
+
 async function disableNotifications() {
+  if (
+    !pushSupported()
+  ) {
+    return;
+  }
+
   const registration =
     await navigator
       .serviceWorker
@@ -959,11 +1104,25 @@ async function disableNotifications() {
       .getSubscription();
 
   if (subscription) {
-    await apiUnsubscribePush(
-      subscription.endpoint
-    );
+    try {
+      await apiUnsubscribePush(
+        subscription.endpoint
+      );
+    } catch (error) {
+      console.error(
+        'Push unsubscribe server error:',
+        error
+      );
+    }
 
-    await subscription.unsubscribe();
+    try {
+      await subscription.unsubscribe();
+    } catch (error) {
+      console.error(
+        'Push unsubscribe browser error:',
+        error
+      );
+    }
   }
 
   localStorage.removeItem(
@@ -980,32 +1139,91 @@ async function disableNotifications() {
 }
 
 
-async function setupNotificationButton() {
-  if (
-    !('Notification' in window)
-  ) {
-    $('notification-btn')
-      .classList.add(
-        'hidden'
-      );
+/*
+ * ==========================================
+ * CHECK PUSH STATE
+ * ==========================================
+ */
 
+async function setupNotificationButton() {
+  const button =
+    $('notification-btn');
+
+  const icon =
+    $('notification-icon');
+
+  if (!button || !icon) {
     return;
   }
 
   if (
-    Notification.permission ===
-    'granted'
+    !pushSupported()
   ) {
-    $('notification-icon')
-      .textContent =
-      '🔔';
-  } else {
-    $('notification-icon')
-      .textContent =
+    button.classList.add(
+      'hidden'
+    );
+
+    return;
+  }
+
+  button.classList.remove(
+    'hidden'
+  );
+
+  /*
+   * Если браузер уже запретил
+   * уведомления.
+   */
+  if (
+    Notification.permission ===
+    'denied'
+  ) {
+    icon.textContent =
+      '🔕';
+
+    return;
+  }
+
+  /*
+   * Проверяем реальную subscription,
+   * а не только localStorage.
+   */
+  try {
+    const registration =
+      await navigator
+        .serviceWorker
+        .ready;
+
+    const subscription =
+      await registration
+        .pushManager
+        .getSubscription();
+
+    if (subscription) {
+      icon.textContent =
+        '🔔';
+    } else {
+      icon.textContent =
+        '🔕';
+    }
+
+  } catch (error) {
+    console.error(
+      'Push state error:',
+      error
+    );
+
+    icon.textContent =
       '🔕';
   }
 }
 
+
+/*
+ * ==========================================
+ * NOTIFICATION BUTTON
+ * ==========================================
+ */
 
 $('notification-btn')
   .addEventListener(
@@ -1014,18 +1232,24 @@ $('notification-btn')
       const button =
         $('notification-btn');
 
+      if (
+        button.disabled
+      ) {
+        return;
+      }
+
       button.disabled =
         true;
 
       try {
-        if (
-          Notification.permission ===
-          'granted'
-        ) {
-          await enableNotifications();
-        } else {
-          await enableNotifications();
-        }
+        /*
+         * Если подписка уже существует,
+         * enableNotifications() просто
+         * повторно зарегистрирует её
+         * на сервере.
+         */
+        await enableNotifications();
+
       } catch (error) {
         console.error(
           'Notification error:',
@@ -1036,6 +1260,7 @@ $('notification-btn')
           error.message,
           true
         );
+
       } finally {
         button.disabled =
           false;
@@ -1044,14 +1269,16 @@ $('notification-btn')
   );
 
 
-/* =========================
-   LOGIN
-========================= */
+/*
+ * ==========================================
+ * LOGIN
+ * ==========================================
+ */
 
 $('login-form')
   .addEventListener(
     'submit',
-    async event => {
+    async (event) => {
       event.preventDefault();
 
       if (authInProgress) {
@@ -1090,13 +1317,19 @@ $('login-form')
         'Подключение…';
 
       try {
-        deviceId =
-          getDeviceId();
-
+        /*
+         * Загружаем существующий
+         * E2E-ключ или создаём новый.
+         */
         loadOrGenerateKeys(
           name
         );
 
+        /*
+         * Авторизация создаёт
+         * новую серверную session
+         * с собственным deviceId.
+         */
         await apiAuth(
           name,
           password,
@@ -1111,9 +1344,11 @@ $('login-form')
           name
         );
 
-        renderedMessageIds
-          .clear();
+        renderedMessageIds.clear();
 
+        /*
+         * Очищаем предыдущий интерфейс.
+         */
         $('messages')
           .innerHTML = `
             <div
@@ -1136,13 +1371,56 @@ $('login-form')
             </div>
           `;
 
-        showChat(name);
+        showChat(
+          name
+        );
 
+        /*
+         * Push-кнопка проверяется
+         * после успешной авторизации.
+         */
         await setupNotificationButton();
 
+        /*
+         * Сначала загружаем историю.
+         */
         await loadHistory();
 
+        /*
+         * Затем запускаем polling.
+         */
         await checkMessages();
+
+        /*
+         * Если Push уже был разрешён
+         * и subscription существует,
+         * повторно регистрируем её
+         * на текущей серверной session.
+         *
+         * Это особенно важно после
+         * входа с другого устройства
+         * или после новой session.
+         */
+        if (
+          pushSupported() &&
+          isStandaloneMode() &&
+          Notification.permission ===
+            'granted'
+        ) {
+          try {
+            await enableNotifications();
+          } catch (pushError) {
+            /*
+             * Push не должен блокировать
+             * вход и работу мессенджера.
+             */
+            console.warn(
+              'Automatic push registration failed:',
+              pushError
+            );
+          }
+        }
+
       } catch (error) {
         console.error(
           'Login error:',
@@ -1152,6 +1430,7 @@ $('login-form')
         $('login-error')
           .textContent =
           error.message;
+
       } finally {
         authInProgress =
           false;
@@ -1168,9 +1447,11 @@ $('login-form')
   );
 
 
-/* =========================
-   LOGOUT
-========================= */
+/*
+ * ==========================================
+ * LOGOUT
+ * ==========================================
+ */
 
 $('logout-btn')
   .addEventListener(
@@ -1195,8 +1476,7 @@ $('logout-btn')
       publicKey =
         null;
 
-      renderedMessageIds
-        .clear();
+      renderedMessageIds.clear();
 
       $('messages')
         .innerHTML = `
@@ -1229,20 +1509,28 @@ $('logout-btn')
   );
 
 
-/* =========================
-   SEND
-========================= */
+/*
+ * ==========================================
+ * MESSAGE COMPOSER
+ * ==========================================
+ */
 
 $('composer')
   .addEventListener(
     'submit',
-    event => {
+    (event) => {
       event.preventDefault();
 
       sendMessage();
     }
   );
 
+
+/*
+ * ==========================================
+ * SEND MESSAGE
+ * ==========================================
+ */
 
 async function sendMessage() {
   if (!username) {
@@ -1271,99 +1559,90 @@ async function sendMessage() {
     true;
 
   setStatus(
-    'Получение ключей устройств…'
+    'Шифрование и отправка…'
   );
 
   try {
-    const data =
+    /*
+     * Получаем публичный ключ
+     * получателя.
+     */
+    const recipientPub =
       await apiGetPublicKey(
         recipient
       );
 
-    const devices =
-      Array.isArray(
-        data.devices
-      )
-        ? data.devices
-        : [];
-
     if (
-      devices.length === 0
+      !recipientPub
     ) {
       throw new Error(
-        'У получателя нет зарегистрированных устройств'
+        'Публичный ключ получателя не найден'
       );
     }
 
-    setStatus(
-      'Шифрование сообщения…'
-    );
-
-    const encrypted = [];
+    /*
+     * Создаём отдельный
+     * NCR-LWE ciphertext.
+     */
+    const {
+      ciphertext,
+      K
+    } =
+      NCRLWE.encapsulate(
+        recipientPub
+      );
 
     /*
-     * Каждому устройству
-     * отдельная криптографическая
-     * копия.
+     * Из общего секрета
+     * получаем AES-ключ.
      */
-    for (
-      const device of devices
-    ) {
-      const {
-        ciphertext,
+    const aesKey =
+      await deriveAesKey(
         K
-      } =
-        NCRLWE.encapsulate(
-          device.publicKey
-        );
+      );
 
-      const aesKey =
-        await deriveAesKey(
-          K
-        );
+    /*
+     * Шифруем текст AES-GCM.
+     */
+    const encrypted =
+      await encryptMessage(
+        aesKey,
+        message
+      );
 
-      const encryptedMessage =
-        await encryptMessage(
-          aesKey,
-          message
-        );
+    const payload = {
+      U:
+        ciphertext.U,
 
-      encrypted.push({
-        deviceId:
-          device.deviceId,
+      V:
+        ciphertext.V,
 
-        payload: {
-          U:
-            ciphertext.U,
+      nonce:
+        encrypted.nonce,
 
-          V:
-            ciphertext.V,
+      ciphertext:
+        encrypted.ciphertext
+    };
 
-          nonce:
-            encryptedMessage
-              .nonce,
-
-          ciphertext:
-            encryptedMessage
-              .ciphertext
-        }
-      });
-    }
-
-    setStatus(
-      'Отправка…'
-    );
-
+    /*
+     * Сервер сохраняет сообщение
+     * независимо от Push.
+     */
     const result =
       await apiSend(
         recipient,
-        encrypted
+        payload
       );
 
+    /*
+     * Отображаем собственное
+     * отправленное сообщение.
+     */
     addMessage(
       message,
       {
-        outgoing: true,
+        outgoing:
+          true,
 
         sender:
           username,
@@ -1382,9 +1661,32 @@ async function sendMessage() {
 
     autoGrowTextarea();
 
-    setStatus(
-      `Отправлено пользователю ${recipient}`
-    );
+    /*
+     * Push-статистика сервера
+     * не влияет на успешность
+     * отправки.
+     */
+    if (
+      typeof result.pushSent ===
+        'number'
+    ) {
+      if (
+        result.pushSent > 0
+      ) {
+        setStatus(
+          `Отправлено пользователю ${recipient}`
+        );
+      } else {
+        setStatus(
+          `Сообщение отправлено пользователю ${recipient}`
+        );
+      }
+    } else {
+      setStatus(
+        `Сообщение отправлено пользователю ${recipient}`
+      );
+    }
+
   } catch (error) {
     console.error(
       'Send error:',
@@ -1395,6 +1697,7 @@ async function sendMessage() {
       `Ошибка отправки: ${error.message}`,
       true
     );
+
   } finally {
     $('send-btn')
       .disabled =
@@ -1406,9 +1709,11 @@ async function sendMessage() {
 }
 
 
-/* =========================
-   TEXTAREA
-========================= */
+/*
+ * ==========================================
+ * TEXTAREA
+ * ==========================================
+ */
 
 function autoGrowTextarea() {
   const textarea =
@@ -1424,16 +1729,18 @@ function autoGrowTextarea() {
     )}px`;
 }
 
+
 $('message-input')
   .addEventListener(
     'input',
     autoGrowTextarea
   );
 
+
 $('message-input')
   .addEventListener(
     'keydown',
-    event => {
+    (event) => {
       if (
         event.key ===
           'Enter' &&
@@ -1447,12 +1754,11 @@ $('message-input')
   );
 
 
-/* =========================
-   STARTUP
-========================= */
-
-deviceId =
-  getDeviceId();
+/*
+ * ==========================================
+ * RESTORE LAST USERNAME
+ * ==========================================
+ */
 
 const lastUsername =
   localStorage.getItem(
@@ -1466,6 +1772,12 @@ if (lastUsername) {
 }
 
 
+/*
+ * ==========================================
+ * SERVICE WORKER
+ * ==========================================
+ */
+
 if (
   'serviceWorker' in
   navigator
@@ -1474,11 +1786,20 @@ if (
     .register(
       '/sw.js'
     )
+    .then(
+      (registration) => {
+        console.log(
+          'Service Worker registered:',
+          registration.scope
+        );
+      }
+    )
     .catch(
-      error =>
+      (error) => {
         console.warn(
           'Service Worker:',
           error
-        )
+        );
+      }
     );
 }

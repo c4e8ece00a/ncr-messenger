@@ -15,14 +15,6 @@ import {
 
 const MAX_PAYLOAD_SIZE = 60000;
 
-function getErrorStatus(error) {
-  return (
-    error?.statusCode ||
-    error?.status ||
-    null
-  );
-}
-
 export default async function handler(req, res) {
   securityHeaders(res);
   noStore(res);
@@ -106,12 +98,6 @@ export default async function handler(req, res) {
       });
     }
 
-    /*
-     * Проверяем существование аккаунта.
-     *
-     * Это единственное, что необходимо
-     * для доставки сообщения.
-     */
     const recipientExists =
       await redis.exists(
         `user:${recipient}`
@@ -125,11 +111,13 @@ export default async function handler(req, res) {
     }
 
     /*
-     * Создаём сообщение.
+     * ==========================================
+     * 1. СОХРАНЯЕМ СООБЩЕНИЕ
+     * ==========================================
      *
-     * Оно уже полностью зашифровано
-     * на клиенте.
+     * Это происходит независимо от Push.
      */
+
     const message = {
       id: crypto.randomUUID(),
 
@@ -144,33 +132,19 @@ export default async function handler(req, res) {
       ...payload
     };
 
-    /*
-     * ГЛАВНОЕ:
-     *
-     * Сообщение сохраняется независимо
-     * от Push.
-     */
     await redis.rpush(
       `messages:${recipient}`,
       JSON.stringify(message)
     );
 
     /*
-     * Push — только уведомление.
+     * ==========================================
+     * 2. ПЫТАЕМСЯ ОТПРАВИТЬ PUSH
+     * ==========================================
      *
-     * Если Push отсутствует,
-     * сообщение всё равно считается
-     * успешно доставленным в очередь.
+     * Ошибка Push НИКОГДА не должна
+     * отменять доставку сообщения.
      */
-    const pushPayload = {
-      type: 'new-message',
-
-      sender:
-        session.username,
-
-      messageId:
-        message.id
-    };
 
     const subscriptions =
       await redis.keys(
@@ -178,101 +152,82 @@ export default async function handler(req, res) {
       );
 
     let pushSent = 0;
-    let pushRemoved = 0;
+    let pushFailed = 0;
 
-    /*
-     * Если у пользователя нет
-     * ни одного устройства с Push —
-     * это НЕ ошибка.
-     */
-    if (
-      Array.isArray(subscriptions) &&
-      subscriptions.length > 0
+    for (
+      const key of subscriptions
     ) {
-      for (
-        const key of subscriptions
-      ) {
-        try {
-          const raw =
-            await redis.get(key);
+      try {
+        const raw =
+          await redis.get(key);
 
-          if (!raw) {
-            continue;
-          }
+        if (!raw) {
+          continue;
+        }
 
-          const stored =
-            typeof raw === 'string'
-              ? JSON.parse(raw)
-              : raw;
+        const stored =
+          typeof raw === 'string'
+            ? JSON.parse(raw)
+            : raw;
 
-          const subscription =
-            stored?.subscription;
+        const subscription =
+          stored?.subscription;
 
-          if (
-            !subscription ||
-            typeof subscription !== 'object'
-          ) {
-            await redis.del(key);
-            pushRemoved++;
-            continue;
-          }
+        if (
+          !subscription ||
+          typeof subscription !== 'object'
+        ) {
+          await redis.del(key);
+          continue;
+        }
 
-          await sendPush(
-            subscription,
-            pushPayload
-          );
+        const pushPayload = {
+          type:
+            'new-message',
 
-          pushSent++;
-        } catch (pushError) {
-          const status =
-            getErrorStatus(
-              pushError
-            );
+          sender:
+            session.username,
 
-          console.error(
-            'Push delivery failed:',
-            status ||
-              pushError?.message ||
-              pushError
-          );
+          messageId:
+            message.id
+        };
 
-          /*
-           * 404 / 410:
-           * Push-подписка больше
-           * не существует.
-           *
-           * Удаляем только её.
-           */
-          if (
-            status === 404 ||
-            status === 410
-          ) {
-            try {
-              await redis.del(key);
-              pushRemoved++;
-            } catch (deleteError) {
-              console.error(
-                'Failed to remove dead push subscription:',
-                deleteError?.message ||
-                  deleteError
-              );
-            }
-          }
+        await sendPush(
+          subscription,
+          pushPayload
+        );
 
-          /*
-           * Остальные Push-ошибки
-           * НЕ отменяют доставку сообщения.
-           */
+        pushSent++;
+
+      } catch (pushError) {
+        pushFailed++;
+
+        console.error(
+          'Push delivery failed:',
+          pushError?.statusCode ||
+          pushError?.message ||
+          pushError
+        );
+
+        /*
+         * 404/410 = подписка больше
+         * недействительна.
+         */
+        if (
+          pushError?.statusCode === 404 ||
+          pushError?.statusCode === 410
+        ) {
+          await redis.del(key);
         }
       }
     }
 
     /*
-     * Сообщение сохранено.
-     *
-     * Поэтому всегда возвращаем success,
-     * даже если Push не был отправлен.
+     * ==========================================
+     * 3. ВСЕГДА ВОЗВРАЩАЕМ УСПЕШНУЮ ОТПРАВКУ
+     * ==========================================
      */
+
     return res.status(200).json({
       status: 'sent',
 
@@ -281,18 +236,17 @@ export default async function handler(req, res) {
 
       pushSent,
 
-      pushRemoved,
+      pushFailed,
 
-      devices:
-        Array.isArray(subscriptions)
-          ? subscriptions.length
-          : 0
+      devicesFound:
+        subscriptions.length
     });
+
   } catch (error) {
     console.error(
       'POST /api/send:',
       error?.message ||
-        error
+      error
     );
 
     return res.status(500).json({

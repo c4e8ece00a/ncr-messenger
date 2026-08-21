@@ -1,12 +1,10 @@
-import crypto from 'node:crypto';
 import { hash, verify } from '@node-rs/argon2';
-
 import { getRedis } from '../lib/redis.js';
-
 import {
   MAX_PASSWORD_LENGTH,
   normalizeUsername,
   validUsername,
+  validDeviceId,
   newToken,
   sha256,
   setSessionCookie,
@@ -17,445 +15,176 @@ import {
   securityHeaders
 } from '../lib/security.js';
 
-
-const SESSION_TTL =
-  60 * 60 * 24 * 30;
-
-const MIN_PASSWORD_LENGTH =
-  8;
-
-
-/*
- * Создаём уникальный идентификатор
- * конкретного устройства.
- *
- * Он НЕ является секретом.
- * Он нужен для привязки Push-подписки
- * к конкретному устройству.
- */
-function createDeviceId() {
-  return crypto.randomUUID();
-}
-
+const SESSION_TTL = 60 * 60 * 24 * 30;
+const MIN_PASSWORD_LENGTH = 8;
 
 function genericAuthError(res) {
-  return res.status(401).json({
-    error:
-      'Неверные учетные данные'
+  return res.status(401).json({ error: 'Неверные учетные данные' });
+}
+
+async function createPasswordHash(password) {
+  return hash(password, {
+    algorithm: 'argon2id',
+    memoryCost: 19456,
+    timeCost: 2,
+    parallelism: 1
   });
 }
 
-
-async function createPasswordHash(password) {
-  return hash(
-    password,
-    {
-      algorithm: 'argon2id',
-
-      memoryCost: 19456,
-
-      timeCost: 2,
-
-      parallelism: 1
-    }
-  );
+function sameJson(a, b) {
+  try {
+    return JSON.stringify(a) === JSON.stringify(b);
+  } catch {
+    return false;
+  }
 }
 
+async function ensureDevice(redis, username, deviceId, publicKey) {
+  const deviceKey = `device:${username}:${deviceId}`;
+  const existingDevice = await redis.get(deviceKey);
+
+  if (existingDevice) {
+    const device = typeof existingDevice === 'string'
+      ? JSON.parse(existingDevice)
+      : existingDevice;
+
+    if (!device?.publicKey || !sameJson(device.publicKey, publicKey)) {
+      const error = new Error('Ключ этого устройства не совпадает с сохранённым ключом');
+      error.code = 'DEVICE_KEY_MISMATCH';
+      throw error;
+    }
+
+    await redis.sadd(`devices:${username}`, deviceId);
+    return;
+  }
+
+  await redis.set(deviceKey, JSON.stringify({
+    username,
+    deviceId,
+    publicKey,
+    createdAt: Date.now(),
+    updatedAt: Date.now()
+  }));
+
+  await redis.sadd(`devices:${username}`, deviceId);
+}
 
 export default async function handler(req, res) {
   securityHeaders(res);
   noStore(res);
 
-
   if (req.method !== 'POST') {
-    return res.status(405).json({
-      error:
-        'Method not allowed'
-    });
+    return res.status(405).json({ error: 'Method not allowed' });
   }
 
-
-  if (!requireSameOrigin(req, res)) {
-    return;
-  }
-
+  if (!requireSameOrigin(req, res)) return;
 
   if (jsonBodySize(req) > 16 * 1024) {
-    return res.status(413).json({
-      error:
-        'Слишком большой запрос'
-    });
+    return res.status(413).json({ error: 'Слишком большой запрос' });
   }
 
-
   try {
-    const body =
-      req.body || {};
+    const body = req.body || {};
+    const username = normalizeUsername(body.username);
+    const password = String(body.password ?? '');
+    const publicKey = body.publicKey;
+    const deviceId = String(body.deviceId ?? '').trim();
 
-
-    const username =
-      normalizeUsername(
-        body.username
-      );
-
-
-    const password =
-      String(
-        body.password ?? ''
-      );
-
-
-    const publicKey =
-      body.publicKey;
-
-
-    /*
-     * Проверяем входные данные.
-     */
     if (
       !validUsername(username) ||
-      password.length <
-        MIN_PASSWORD_LENGTH ||
-      password.length >
-        MAX_PASSWORD_LENGTH
+      password.length < MIN_PASSWORD_LENGTH ||
+      password.length > MAX_PASSWORD_LENGTH ||
+      !validDeviceId(deviceId) ||
+      !publicKey ||
+      typeof publicKey !== 'object'
     ) {
       return genericAuthError(res);
     }
 
-
-    const redis =
-      getRedis();
-
-
-    /*
-     * Ограничение количества
-     * попыток авторизации.
-     */
-    const ip =
-      req.headers[
-        'x-forwarded-for'
-      ] ||
-      'unknown';
-
-
-    const rl =
-      await rateLimit(
-        redis,
-
-        `login:${username}:${ip}`,
-
-        5,
-
-        300
-      );
-
+    const redis = getRedis();
+    const ip = req.headers['x-forwarded-for'] || 'unknown';
+    const rl = await rateLimit(redis, `login:${username}:${ip}`, 5, 300);
 
     if (!rl.allowed) {
-      return res.status(429).json({
-        error:
-          'Слишком много попыток. Попробуйте позже.'
-      });
+      return res.status(429).json({ error: 'Слишком много попыток. Попробуйте позже.' });
     }
 
+    const userKey = `user:${username}`;
+    const existing = await redis.get(userKey);
 
-    const userKey =
-      `user:${username}`;
-
-
-    const existing =
-      await redis.get(
-        userKey
-      );
-
-
-    /*
-     * =========================================
-     * НОВЫЙ ПОЛЬЗОВАТЕЛЬ
-     * =========================================
-     */
     if (!existing) {
+      const passwordHash = await createPasswordHash(password);
 
-      if (
-        !publicKey ||
-        typeof publicKey !==
-          'object'
-      ) {
-        return res.status(400).json({
-          error:
-            'Для нового аккаунта требуется publicKey'
-        });
-      }
-
-
-      const passwordHash =
-        await createPasswordHash(
-          password
-        );
-
-
-      await redis.set(
-        userKey,
-
-        JSON.stringify({
-          username,
-
-          passwordHash,
-
-          createdAt:
-            Date.now()
-        })
-      );
-
-
-      /*
-       * Публичный ключ шифрования
-       * пользователя сохраняется
-       * отдельно от его пароля.
-       */
-      await redis.set(
-        `publicKey:${username}`,
-
-        publicKey
-      );
-
+      await redis.set(userKey, JSON.stringify({
+        username,
+        passwordHash,
+        createdAt: Date.now()
+      }));
     } else {
-
-      /*
-       * =========================================
-       * СУЩЕСТВУЮЩИЙ ПОЛЬЗОВАТЕЛЬ
-       * =========================================
-       */
-
       let user;
 
-
       try {
-        user =
-          typeof existing ===
-            'string'
-            ? JSON.parse(existing)
-            : existing;
-
+        user = typeof existing === 'string' ? JSON.parse(existing) : existing;
       } catch {
         return genericAuthError(res);
       }
 
+      let valid = false;
 
-      let valid =
-        false;
-
-
-      /*
-       * Основной вариант —
-       * Argon2id.
-       */
-      if (
-        user?.passwordHash
-      ) {
+      if (user?.passwordHash) {
         try {
-          valid =
-            await verify(
-              user.passwordHash,
-              password
-            );
-
-        } catch (verifyError) {
-          /*
-           * Если старый hash имеет
-           * неподдерживаемый формат,
-           * ниже попробуем legacy SHA-256.
-           */
-          console.error(
-            'Password verification:',
-            verifyError?.message ||
-            verifyError
-          );
-
-          valid = false;
+          valid = await verify(user.passwordHash, password);
+        } catch (error) {
+          console.error('Password verification:', error?.message || error);
         }
       }
 
-
-      /*
-       * =========================================
-       * LEGACY SHA-256 MIGRATION
-       * =========================================
-       *
-       * Старые аккаунты могут иметь:
-       *
-       * sha256:<hash>
-       *
-       * При успешном входе сразу
-       * переводим пароль на Argon2id.
-       */
       if (
         !valid &&
-        typeof user?.passwordHash ===
-          'string' &&
-        user.passwordHash.startsWith(
-          'sha256:'
-        )
+        typeof user?.passwordHash === 'string' &&
+        user.passwordHash.startsWith('sha256:')
       ) {
+        const legacy = sha256(password);
 
-        const legacy =
-          sha256(password);
-
-
-        if (
-          legacy ===
-          user.passwordHash.slice(7)
-        ) {
-
-          const upgraded =
-            await createPasswordHash(
-              password
-            );
-
-
-          user.passwordHash =
-            upgraded;
-
-
-          await redis.set(
-            userKey,
-
-            JSON.stringify(
-              user
-            )
-          );
-
-
+        if (legacy === user.passwordHash.slice(7)) {
+          user.passwordHash = await createPasswordHash(password);
+          await redis.set(userKey, JSON.stringify(user));
           valid = true;
         }
       }
 
-
-      if (!valid) {
-        return genericAuthError(res);
-      }
-
-
-      /*
-       * Не заменяем существующий
-       * публичный ключ пользователя.
-       *
-       * Это важно для E2E-шифрования.
-       */
-      if (publicKey) {
-
-        const storedKey =
-          await redis.get(
-            `publicKey:${username}`
-          );
-
-
-        if (!storedKey) {
-
-          await redis.set(
-            `publicKey:${username}`,
-
-            publicKey
-          );
-        }
-      }
+      if (!valid) return genericAuthError(res);
     }
 
+    await ensureDevice(redis, username, deviceId, publicKey);
 
-    /*
-     * =========================================
-     * DEVICE ID
-     * =========================================
-     *
-     * Каждый успешный вход получает
-     * собственный deviceId.
-     *
-     * Поэтому один аккаунт может иметь:
-     *
-     * iPhone  -> device A
-     * iPad    -> device B
-     * Browser -> device C
-     *
-     * Каждая Push-подписка будет
-     * привязана к своему устройству.
-     */
-    const deviceId =
-      createDeviceId();
-
-
-    /*
-     * =========================================
-     * SESSION
-     * =========================================
-     */
-
-    const token =
-      newToken(32);
-
-
-    const tokenHash =
-      sha256(token);
-
-
+    const token = newToken(32);
+    const tokenHash = sha256(token);
     const session = {
       username,
-
       deviceId,
-
-      createdAt:
-        Date.now()
+      createdAt: Date.now()
     };
-
 
     await redis.set(
       `session:${tokenHash}`,
-
-      JSON.stringify(
-        session
-      ),
-
-      {
-        ex:
-          SESSION_TTL
-      }
+      JSON.stringify(session),
+      { ex: SESSION_TTL }
     );
 
+    setSessionCookie(res, token, SESSION_TTL);
 
-    setSessionCookie(
-      res,
-
-      token,
-
-      SESSION_TTL
-    );
-
-
-    /*
-     * Клиенту deviceId обычно
-     * не нужно возвращать.
-     *
-     * Он уже находится
-     * внутри серверной сессии.
-     */
     return res.status(200).json({
-      status:
-        'ok',
-
-      username
+      status: 'ok',
+      username,
+      deviceId
     });
-
   } catch (error) {
+    if (error?.code === 'DEVICE_KEY_MISMATCH') {
+      return res.status(409).json({ error: error.message });
+    }
 
-    console.error(
-      'POST /api/auth:',
-
-      error?.message ||
-      error
-    );
-
-
-    return res.status(500).json({
-      error:
-        'Ошибка авторизации'
-    });
+    console.error('POST /api/auth:', error?.message || error);
+    return res.status(500).json({ error: 'Ошибка авторизации' });
   }
 }

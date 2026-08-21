@@ -1,5 +1,4 @@
 import { getRedis } from '../lib/redis.js';
-
 import {
   securityHeaders,
   noStore,
@@ -13,33 +12,22 @@ export default async function handler(req, res) {
   noStore(res);
 
   if (req.method !== 'GET') {
-    return res.status(405).json({
-      error: 'Method not allowed'
-    });
+    return res.status(405).json({ error: 'Method not allowed' });
   }
 
   try {
     const redis = getRedis();
-
     const session = await requireSession(req, res, redis);
     if (!session) return;
 
-    const rawMessages = await redis.lrange(
-      `messages:${session.username}`,
-      -MAX_HISTORY,
-      -1
-    );
-
+    const key = `messages:${session.username}:${session.deviceId}`;
+    const rawMessages = await redis.lrange(key, -MAX_HISTORY, -1);
     const messages = [];
 
     for (const raw of rawMessages) {
       try {
-        const parsed =
-          typeof raw === 'string' ? JSON.parse(raw) : raw;
-
-        if (parsed && typeof parsed === 'object') {
-          messages.push(parsed);
-        }
+        const parsed = typeof raw === 'string' ? JSON.parse(raw) : raw;
+        if (parsed && typeof parsed === 'object') messages.push(parsed);
       } catch (error) {
         console.error('Invalid message:', error);
       }
@@ -47,13 +35,7 @@ export default async function handler(req, res) {
 
     return res.status(200).json({ messages });
   } catch (error) {
-    console.error(
-      'GET /api/messages:',
-      error?.message || error
-    );
-
-    return res.status(500).json({
-      error: 'Ошибка чтения сообщений'
-    });
+    console.error('GET /api/messages:', error?.message || error);
+    return res.status(500).json({ error: 'Ошибка чтения сообщений' });
   }
 }

@@ -1,6 +1,6 @@
 {
   "name": "ncr-messenger",
-  "version": "3.2.1",
+  "version": "3.3.0",
   "private": true,
   "type": "module",
   "engines": {
@@ -12,6 +12,6 @@
     "web-push": "^3.6.7"
   },
   "scripts": {
-    "test": "node tests/test-security.cjs && node tests/test-ncr-lwe.cjs && node tests/test-e2e.cjs"
+    "test": "node tests/test-syntax.cjs && node tests/test-security.cjs && node tests/test-ncr-lwe.cjs && node tests/test-e2e.cjs && node tests/test-multidevice.cjs"
   }
 }
